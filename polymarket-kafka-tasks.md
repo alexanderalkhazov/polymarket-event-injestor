@@ -6,225 +6,225 @@ This file breaks the assignment into concrete tasks you can implement and track.
 
 ## 1. Project Setup
 
-- [ ] **Initialize project structure**
-  - [ ] Create `polymarket-kafka/` root (if not already present)
-  - [ ] Create `src/polymarket_kafka/` package with `__init__.py`
-  - [ ] Create `tests/` package with `__init__.py`
-- [ ] **Add `pyproject.toml`**
-  - [ ] Use the exact config specified in the assignment
-  - [ ] Include runtime dependencies (`confluent-kafka`, `python-dotenv`, `pymongo`, `requests`, `certifi`, `pydantic`)
-  - [ ] Include dev dependencies (`pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`)
-- [ ] **Create `README.md`**
-  - [ ] Brief description of the service
-  - [ ] High-level architecture overview
+- [x] **Initialize project structure**
+  - [x] Create `polymarket-kafka/` root (if not already present)
+  - [x] Create `src/polymarket_kafka/` package with `__init__.py`
+  - [x] Create `tests/` package with `__init__.py`
+- [x] **Add `pyproject.toml`**
+  - [x] Use the exact config specified in the assignment
+  - [x] Include runtime dependencies (`confluent-kafka`, `python-dotenv`, `pymongo`, `requests`, `certifi`, `pydantic`)
+  - [x] Include dev dependencies (`pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`)
+- [x] **Create `README.md`**
+  - [x] Brief description of the service
+  - [x] High-level architecture overview
   - [ ] Section describing conviction detection design choices (will be filled after Section 6)
-- [ ] **Create `app.env.example`**
-  - [ ] List all env vars from Section 9 with sensible example values
+- [x] **Create `app.env.example`**
+  - [x] List all env vars from Section 9 with sensible example values
 
 ---
 
 ## 2. Configuration (`config.py`)
 
-- [ ] **Define config dataclasses**
-  - [ ] `PolymarketConfig`
-  - [ ] `KafkaConfig`
-  - [ ] `MongoConfig`
-  - [ ] `AppConfig`
-- [ ] **Load from environment**
-  - [ ] Implement helper function (e.g. `load_config()`) that:
-    - [ ] Loads `.env` via `python-dotenv`
-    - [ ] Reads the env vars defined in Section 9
-    - [ ] Populates and returns `AppConfig`
-- [ ] **Validation and defaults**
-  - [ ] Ensure required fields (e.g. Kafka bootstrap servers, Mongo URI) are present
-  - [ ] Apply default values where specified in the assignment
+- [x] **Define config dataclasses**
+  - [x] `PolymarketConfig`
+  - [x] `KafkaConfig`
+  - [x] `MongoConfig`
+  - [x] `AppConfig`
+- [x] **Load from environment**
+  - [x] Implement helper function (e.g. `load_config()`) that:
+    - [x] Loads `.env` via `python-dotenv`
+    - [x] Reads the env vars defined in Section 9
+    - [x] Populates and returns `AppConfig`
+- [x] **Validation and defaults**
+  - [x] Ensure required fields (e.g. Kafka bootstrap servers, Mongo URI) are present
+  - [x] Apply default values where specified in the assignment
 
 ---
 
 ## 3. DTOs and Models
 
-- [ ] **Define `PolymarketEvent` (Pydantic model)**
-  - [ ] Include required fields:
-    - [ ] `event_id: str`
-    - [ ] `timestamp: datetime`
-    - [ ] `market_id: str`
-    - [ ] `question: str`
-    - [ ] `yes_price: float`
-    - [ ] `no_price: float`
-    - [ ] `source: str` (must be `"polymarket-kafka"`)
-    - [ ] `published_at: Optional[datetime]`
-  - [ ] Add conviction-related fields (your design, see Section 6), e.g.:
-    - [ ] Direction of conviction change
-    - [ ] Magnitude (absolute and/or percentage)
-    - [ ] Optional rolling metrics (e.g., from/to prices, window size)
-  - [ ] Set `model_config = {"extra": "forbid", "frozen": True}`
+- [x] **Define `PolymarketEvent` (Pydantic model)**
+  - [x] Include required fields:
+    - [x] `event_id: str`
+    - [x] `timestamp: datetime`
+    - [x] `market_id: str`
+    - [x] `question: str`
+    - [x] `yes_price: float`
+    - [x] `no_price: float`
+    - [x] `source: str` (must be `"polymarket-kafka"`)
+    - [x] `published_at: Optional[datetime]`
+  - [x] Add conviction-related fields (your design, see Section 6), e.g.:
+    - [x] Direction of conviction change
+    - [x] Magnitude (absolute and/or percentage)
+    - [x] Optional rolling metrics (e.g., from/to prices, window size)
+  - [x] Set `model_config = {"extra": "forbid", "frozen": True}`
 
-- [ ] **Define `PolymarketSubscription` (Pydantic model)**
-  - [ ] Include required fields:
-    - [ ] `market_id: str`
-    - [ ] `ref_count: int`
-    - [ ] `created_at: Optional[datetime]`
-    - [ ] `updated_at: Optional[datetime]`
-  - [ ] Optionally add conviction configuration fields (per-market thresholds, etc.)
-  - [ ] Implement methods:
-    - [ ] `is_active() -> bool` (`return self.ref_count > 0`)
-    - [ ] `subscription_key() -> str` (unique key, e.g. `market_id`)
-  - [ ] Use `model_config = {"extra": "forbid"}`
+- [x] **Define `PolymarketSubscription` (Pydantic model)**
+  - [x] Include required fields:
+    - [x] `market_id: str`
+    - [x] `ref_count: int`
+    - [x] `created_at: Optional[datetime]`
+    - [x] `updated_at: Optional[datetime]`
+  - [x] Optionally add conviction configuration fields (per-market thresholds, etc.)
+  - [x] Implement methods:
+    - [x] `is_active() -> bool` (`return self.ref_count > 0`)
+    - [x] `subscription_key() -> str` (unique key, e.g. `market_id`)
+  - [x] Use `model_config = {"extra": "forbid"}`
 
-- [ ] **Extend `SignalType` enum**
-  - [ ] Add `POLYMARKET = "polymarket"` to the existing enum pattern
+- [x] **Extend `SignalType` enum**
+  - [x] Add `POLYMARKET = "polymarket"` to the existing enum pattern
 
 ---
 
 ## 4. Polymarket Data Source (`data_source.py`)
 
-- [ ] **Implement HTTP client wrapper**
-  - [ ] Use `requests` (or `httpx` if desired, but keep simple) with:
-    - [ ] Session pooling
-    - [ ] Configurable timeouts from `PolymarketConfig`
-    - [ ] Basic retry logic (e.g., retries on transient network errors or 5xx)
-  - [ ] Respect `POLYMARKET_RATE_LIMIT_DELAY_MS` between calls
-- [ ] **Implement data fetch methods**
-  - [ ] Function to fetch a single market snapshot by `market_id` (condition_id)
-  - [ ] Parse JSON into an internal structure that exposes:
-    - [ ] `yes_price`
-    - [ ] `no_price`
-    - [ ] `volume`
-    - [ ] `liquidity`
-    - [ ] `question`
-    - [ ] `active` / `closed` status
-- [ ] **Error handling**
-  - [ ] Handle HTTP errors, timeouts, and invalid responses
-  - [ ] Return a well-defined error or `None` so the runner can decide what to do
+- [x] **Implement HTTP client wrapper**
+  - [x] Use `requests` (or `httpx` if desired, but keep simple) with:
+    - [x] Session pooling
+    - [x] Configurable timeouts from `PolymarketConfig`
+    - [x] Basic retry logic (e.g., retries on transient network errors or 5xx)
+  - [x] Respect `POLYMARKET_RATE_LIMIT_DELAY_MS` between calls
+- [x] **Implement data fetch methods**
+  - [x] Function to fetch a single market snapshot by `market_id` (condition_id)
+  - [x] Parse JSON into an internal structure that exposes:
+    - [x] `yes_price`
+    - [x] `no_price`
+    - [x] `volume`
+    - [x] `liquidity`
+    - [x] `question`
+    - [x] `active` / `closed` status
+- [x] **Error handling**
+  - [x] Handle HTTP errors, timeouts, and invalid responses
+  - [x] Return a well-defined error or `None` so the runner can decide what to do
 
 ---
 
 ## 5. Subscription Manager (`subscription_manager.py`)
 
-- [ ] **MongoDB connection**
-  - [ ] Use `pymongo` with `MongoConfig`
-  - [ ] Use `MONGODB_COLLECTION` / `MONGODB_COLLECTION_PREFIX` settings
-- [ ] **Active subscription polling**
-  - [ ] Implement method to fetch all subscriptions with `ref_count > 0`
-  - [ ] Parse documents into `PolymarketSubscription` instances
+- [x] **MongoDB connection**
+  - [x] Use `pymongo` with `MongoConfig`
+  - [x] Use `MONGODB_COLLECTION` / `MONGODB_COLLECTION_PREFIX` settings
+- [x] **Active subscription polling**
+  - [x] Implement method to fetch all subscriptions with `ref_count > 0`
+  - [x] Parse documents into `PolymarketSubscription` instances
   - [ ] Poll at `MONGODB_POLL_INTERVAL_SECONDS` interval
-- [ ] **Subscribe / Unsubscribe helpers**
-  - [ ] Implement `subscribe(market_id: str, ...)` using atomic `$inc`:
-    - [ ] `$inc: {"ref_count": 1}`
-    - [ ] `$setOnInsert` for `created_at`
-    - [ ] `$set` for `updated_at`
-  - [ ] Implement `unsubscribe(market_id: str)` using atomic `$inc`:
-    - [ ] `$inc: {"ref_count": -1}`
-    - [ ] `$set` for `updated_at`
+- [x] **Subscribe / Unsubscribe helpers**
+  - [x] Implement `subscribe(market_id: str, ...)` using atomic `$inc`:
+    - [x] `$inc: {"ref_count": 1}`
+    - [x] `$setOnInsert` for `created_at`
+    - [x] `$set` for `updated_at`
+  - [x] Implement `unsubscribe(market_id: str)` using atomic `$inc`:
+    - [x] `$inc: {"ref_count": -1}`
+    - [x] `$set` for `updated_at`
 
 ---
 
 ## 6. Conviction Change Detection Design & Logic (`runner.py` and/or dedicated module)
 
-- [ ] **Design conviction detection approach**
-  - [ ] Decide on:
-    - [ ] Threshold type (absolute change, percentage change, or both)
-    - [ ] Optional rolling window or rate-of-change logic
-    - [ ] How (if at all) volume/liquidity affect the threshold
-  - [ ] Document design choices clearly in `README.md`
-- [ ] **Implement detection state tracking**
-  - [ ] Track per-`market_id`:
-    - [ ] Last seen YES/NO prices
-    - [ ] Any rolling statistics needed (e.g., previous N prices, last event timestamp)
-- [ ] **Implement detection function**
-  - [ ] Function signature example:  
-    - [ ] `detect_conviction_change(previous_state, current_snapshot, config) -> Optional[ConvictionChange]`
-  - [ ] Return `None` when change is insignificant
-  - [ ] Return structured object when significant change is detected, including:
-    - [ ] Direction (toward YES or NO)
-    - [ ] Magnitude
-    - [ ] Any contextual information (e.g., baseline price, time since last event)
-- [ ] **Handle edge cases**
-  - [ ] First poll where no previous state exists
-  - [ ] Market becomes inactive or closed
-  - [ ] Oscillation around thresholds (e.g., add small hysteresis or cool-down)
-  - [ ] API error / missing data (skip or mark as transient failure)
+- [x] **Design conviction detection approach**
+  - [x] Decide on:
+    - [x] Threshold type (absolute change, percentage change, or both)
+    - [x] Optional rolling window or rate-of-change logic
+    - [x] How (if at all) volume/liquidity affect the threshold
+  - [x] Document design choices clearly in `README.md`
+- [x] **Implement detection state tracking**
+  - [x] Track per-`market_id`:
+    - [x] Last seen YES/NO prices
+    - [x] Any rolling statistics needed (e.g., previous N prices, last event timestamp)
+- [x] **Implement detection function**
+  - [x] Function signature example:  
+    - [x] `detect_conviction_change(previous_state, current_snapshot, config) -> Optional[ConvictionChange]`
+  - [x] Return `None` when change is insignificant
+  - [x] Return structured object when significant change is detected, including:
+    - [x] Direction (toward YES or NO)
+    - [x] Magnitude
+    - [x] Any contextual information (e.g., baseline price, time since last event)
+- [x] **Handle edge cases**
+  - [x] First poll where no previous state exists
+  - [x] Market becomes inactive or closed
+  - [x] Oscillation around thresholds (e.g., add small hysteresis or cool-down)
+  - [x] API error / missing data (skip or mark as transient failure)
 
 ---
 
 ## 7. Event Builder (`event_builder.py`)
 
-- [ ] **Build `PolymarketEvent` instances**
-  - [ ] Function to build event from:
-    - [ ] Market snapshot data
-    - [ ] Conviction change object
-    - [ ] `AppConfig` / environment context
-  - [ ] Generate:
-    - [ ] `event_id` (UUID)
-    - [ ] `timestamp` (UTC when snapshot is taken)
-    - [ ] `source` = `"polymarket-kafka"`
-    - [ ] Conviction fields from detection output
-  - [ ] `published_at` to be filled at the moment of Kafka publish (or immediately before)
-- [ ] **Serialization**
-  - [ ] Provide helper to convert `PolymarketEvent` to a JSON-serializable dict
-  - [ ] Ensure all timestamps are ISO 8601 compatible
+- [x] **Build `PolymarketEvent` instances**
+  - [x] Function to build event from:
+    - [x] Market snapshot data
+    - [x] Conviction change object
+    - [x] `AppConfig` / environment context
+  - [x] Generate:
+    - [x] `event_id` (UUID)
+    - [x] `timestamp` (UTC when snapshot is taken)
+    - [x] `source` = `"polymarket-kafka"`
+    - [x] Conviction fields from detection output
+  - [x] `published_at` to be filled at the moment of Kafka publish (or immediately before)
+- [x] **Serialization**
+  - [x] Provide helper to convert `PolymarketEvent` to a JSON-serializable dict
+  - [x] Ensure all timestamps are ISO 8601 compatible
 
 ---
 
 ## 8. Kafka Client (`kafka_client.py`)
 
-- [ ] **Create Kafka producer**
-  - [ ] Use `confluent-kafka` with configuration from `KafkaConfig`
-  - [ ] Apply recommended producer config from Section 8:
-    - [ ] `acks="all"`
-    - [ ] `enable.idempotence=True`
-    - [ ] `compression.type="zstd"`
-    - [ ] Other batching/timeout settings
-  - [ ] Add SASL/SSL configuration when `security_protocol != "PLAINTEXT"`
-- [ ] **Publish events**
-  - [ ] Implement `publish(event: PolymarketEvent)`:
-    - [ ] Serialize event dict to JSON UTF-8
-    - [ ] Use topic `{KAFKA_TOPIC_PREFIX}{KAFKA_TOPIC}`
-    - [ ] Partition key = `market_id`
-    - [ ] Set `published_at` before sending
-  - [ ] Provide graceful `flush()` method
+- [x] **Create Kafka producer**
+  - [x] Use `confluent-kafka` with configuration from `KafkaConfig`
+  - [x] Apply recommended producer config from Section 8:
+    - [x] `acks="all"`
+    - [x] `enable.idempotence=True`
+    - [x] `compression.type="zstd"`
+    - [x] Other batching/timeout settings
+  - [x] Add SASL/SSL configuration when `security_protocol != "PLAINTEXT"`
+- [x] **Publish events**
+  - [x] Implement `publish(event: PolymarketEvent)`:
+    - [x] Serialize event dict to JSON UTF-8
+    - [x] Use topic `{KAFKA_TOPIC_PREFIX}{KAFKA_TOPIC}`
+    - [x] Partition key = `market_id`
+    - [x] Set `published_at` before sending
+  - [x] Provide graceful `flush()` method
 
 ---
 
 ## 9. Runner / Orchestration (`runner.py`)
 
-- [ ] **Main async loop**
-  - [ ] Periodically (every `POLL_INTERVAL_SECONDS`):
-    - [ ] Fetch active subscriptions from `SubscriptionManager`
-    - [ ] For each subscription:
-      - [ ] Fetch current Polymarket snapshot from `data_source`
-      - [ ] Run conviction detection logic
-      - [ ] If significant change detected:
-        - [ ] Build `PolymarketEvent`
-        - [ ] Publish to Kafka
-      - [ ] Update internal state for deduplication and history
-      - [ ] Apply per-call rate limiting delay for API calls
-- [ ] **Deduplication**
-  - [ ] Maintain in-memory structure keyed by subscription key (e.g., `market_id`)
-  - [ ] Avoid publishing if the new conviction state is equivalent to the last emitted one
-- [ ] **Error isolation**
-  - [ ] Catch and log errors per subscription
-  - [ ] Ensure a single failing subscription does not stop the loop
-- [ ] **Graceful shutdown**
-  - [ ] Add signal handlers for `SIGINT`/`SIGTERM`
-  - [ ] On shutdown:
-    - [ ] Stop polling loop
-    - [ ] Flush Kafka producer
-    - [ ] Close MongoDB client
+- [x] **Main async loop**
+  - [x] Periodically (every `POLL_INTERVAL_SECONDS`):
+    - [x] Fetch active subscriptions from `SubscriptionManager`
+    - [x] For each subscription:
+      - [x] Fetch current Polymarket snapshot from `data_source`
+      - [x] Run conviction detection logic
+      - [x] If significant change detected:
+        - [x] Build `PolymarketEvent`
+        - [x] Publish to Kafka
+      - [x] Update internal state for deduplication and history
+      - [x] Apply per-call rate limiting delay for API calls
+- [x] **Deduplication**
+  - [x] Maintain in-memory structure keyed by subscription key (e.g., `market_id`)
+  - [x] Avoid publishing if the new conviction state is equivalent to the last emitted one
+- [x] **Error isolation**
+  - [x] Catch and log errors per subscription
+  - [x] Ensure a single failing subscription does not stop the loop
+- [x] **Graceful shutdown**
+  - [x] Add signal handlers for `SIGINT`/`SIGTERM`
+  - [x] On shutdown:
+    - [x] Stop polling loop
+    - [x] Flush Kafka producer
+    - [x] Close MongoDB client
 
 ---
 
 ## 10. Entry Point (`__main__.py`)
 
-- [ ] **Wire everything together**
-  - [ ] Load configuration
-  - [ ] Initialize:
-    - [ ] MongoDB `SubscriptionManager`
-    - [ ] Polymarket data source client
-    - [ ] Kafka producer client
-    - [ ] Runner instance
-  - [ ] Use `asyncio.run(runner.run())` (or similar) as the main entry
-  - [ ] Ensure logging is configured at startup
+- [x] **Wire everything together**
+  - [x] Load configuration
+  - [x] Initialize:
+    - [x] MongoDB `SubscriptionManager`
+    - [x] Polymarket data source client
+    - [x] Kafka producer client
+    - [x] Runner instance
+  - [x] Use `asyncio.run(runner.run())` (or similar) as the main entry
+  - [x] Ensure logging is configured at startup
 
 ---
 
@@ -268,9 +268,9 @@ This file breaks the assignment into concrete tasks you can implement and track.
 
 ## 12. Operational & Quality Tasks
 
-- [ ] **Structured logging**
-  - [ ] Use Python’s `logging` module with structured messages (market_id, event_id, etc.)
-  - [ ] Log at appropriate levels (`INFO`, `WARNING`, `ERROR`)
+- [x] **Structured logging**
+  - [x] Use Python’s `logging` module with structured messages (market_id, event_id, etc.)
+  - [x] Log at appropriate levels (`INFO`, `WARNING`, `ERROR`)
 
 - [ ] **Health & observability (optional / nice-to-have)**
   - [ ] Implement lightweight `/health` endpoint (if you add an HTTP server)
@@ -283,22 +283,34 @@ This file breaks the assignment into concrete tasks you can implement and track.
 
 ---
 
+## 14. Docker & Compose
+
+- [x] **Dockerfile**
+  - [x] Build Python 3.11 image
+  - [x] Install project from `pyproject.toml`
+  - [x] Set default environment variables for Kafka and Mongo
+- [x] **docker-compose.yml**
+  - [x] Start Zookeeper + Kafka
+  - [x] Start MongoDB
+  - [x] Start `polymarket-kafka` service wired to Kafka and Mongo
+
+---
+
 ## 13. Final Acceptance Checklist (from assignment)
 
-- [ ] `PolymarketEvent` model with required and conviction fields
-- [ ] `PolymarketSubscription` model with `ref_count` pattern and helpers
+- [x] `PolymarketEvent` model with required and conviction fields
+- [x] `PolymarketSubscription` model with `ref_count` pattern and helpers
 - [ ] Subscription Manager polling MongoDB for `ref_count > 0`
 - [ ] Runner polling Polymarket API per active subscription
 - [ ] Conviction change detection implemented and documented
 - [ ] Events published to Kafka `polymarket-events` with partition key `market_id`
 - [ ] Deduplication to avoid redundant events
 - [ ] Graceful shutdown (signals, Kafka flush, Mongo close)
-- [ ] Configuration via env vars + dataclasses + `python-dotenv`
+- [x] Configuration via env vars + dataclasses + `python-dotenv`
 - [ ] Tests with ≥75% coverage
 - [ ] `subscribe()` / `unsubscribe()` helpers with atomic `$inc`
-- [ ] HTTP session with retries and timeouts
-- [ ] Rate limiting between API calls
+- [x] HTTP session with retries and timeouts
+- [x] Rate limiting between API calls
 - [ ] Structured logging and error isolation
-- [ ] `app.env.example` completed
+- [x] `app.env.example` completed
 - [ ] README updated with conviction detection design
-

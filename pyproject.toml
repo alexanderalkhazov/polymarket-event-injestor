@@ -1,0 +1,46 @@
+[project]
+name = "polymarket-kafka"
+version = "0.1.0"
+description = "Polymarket conviction change to Kafka event streaming service"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "confluent-kafka>=2.3.0",
+    "python-dotenv>=1.0.0",
+    "pymongo>=4.6.0",
+    "requests>=2.32.0",
+    "certifi>=2024.0.0",
+    "pydantic>=2.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true

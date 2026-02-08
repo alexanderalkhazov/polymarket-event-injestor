@@ -1,0 +1,41 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env.local
+
+# Environment files (secrets)
+.env
+
+# Build / distribution
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
