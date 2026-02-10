@@ -204,37 +204,85 @@ class PolymarketClient:
             fetched_at=datetime.now(timezone.utc),
         )
 
-    def fetch_all_markets(self) -> Dict[str, MarketSnapshot]:
-        """Fetch all markets from the CLOB API and return a dict keyed by condition_id."""
-        response = self._request_with_retries("GET", "/markets")
+    def fetch_market_by_slug(self, slug: str) -> Optional[MarketSnapshot]:
+        """Fetch a single market by its slug from the Gamma API.
+
+        Returns None if the market cannot be found or parsed.
+        """
+        try:
+            response = self._request_with_retries(
+                "GET", "/markets", params={"slug": slug}
+            )
+        except PolymarketApiError as exc:
+            logger.warning("Failed to fetch market by slug '%s': %s", slug, exc)
+            return None
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning("Non-JSON response for slug '%s'", slug)
+            return None
+
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
+        if isinstance(data, list) and len(data) > 0:
+            return self._parse_gamma_market(data[0])
+        if isinstance(data, dict):
+            return self._parse_gamma_market(data)
+
+        logger.warning("Empty or unexpected response for slug '%s'", slug)
+        return None
+
+    async def fetch_market_by_slug_async(self, slug: str) -> Optional[MarketSnapshot]:
+        """Async wrapper around fetch_market_by_slug."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.fetch_market_by_slug, slug)
+
+    def _fetch_page(self, offset: int, limit: int = 500) -> List[Dict[str, Any]]:
+        """Fetch a single page of markets from the Gamma API."""
+        response = self._request_with_retries(
+            "GET",
+            "/markets",
+            params={"active": "true", "closed": "false", "limit": str(limit), "offset": str(offset)},
+        )
         try:
             data = response.json()
         except ValueError as exc:
             raise PolymarketApiError("Failed to parse Polymarket API response as JSON") from exc
 
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
         if not isinstance(data, list):
             raise PolymarketApiError(
-                f"Expected array response from CLOB API, got {type(data).__name__}"
+                f"Expected array response from API, got {type(data).__name__}"
             )
+        return data
 
-        logger.info("Fetched %d markets from Polymarket API", len(data))
-        
+    def fetch_all_markets(self) -> Dict[str, MarketSnapshot]:
+        """Fetch all active markets from the Polymarket API, paginating automatically.
+
+        Returns a dict keyed by condition_id.
+        """
+        page_size = 500
+        all_items: List[Dict[str, Any]] = []
+
+        for offset in range(0, 10_000, page_size):
+            page = self._fetch_page(offset, page_size)
+            all_items.extend(page)
+            logger.debug("Fetched page offset=%d, got %d markets (total %d)", offset, len(page), len(all_items))
+            if len(page) < page_size:
+                break  # last page
+
+        logger.info("Fetched %d markets from Polymarket API (paginated)", len(all_items))
+
         result: Dict[str, MarketSnapshot] = {}
-        for idx, item in enumerate(data):
+        for item in all_items:
             if not isinstance(item, dict):
                 continue
             try:
                 snapshot = self._parse_gamma_market(item)
                 if snapshot is not None:
                     result[snapshot.market_id] = snapshot
-                    if idx < 3:  # Log first 3 parsed markets
-                        logger.debug(
-                            "Parsed market %s: %s (YES=%.2f, NO=%.2f)",
-                            snapshot.market_id,
-                            snapshot.question[:50],
-                            snapshot.yes_price,
-                            snapshot.no_price,
-                        )
             except PolymarketApiError as exc:
                 logger.error("API parsing error for market %s: %s", item.get("conditionId"), exc)
                 raise

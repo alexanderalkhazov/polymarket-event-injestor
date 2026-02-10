@@ -59,6 +59,7 @@ class PolymarketSubscription(BaseModel):
     """
 
     market_id: str = Field(..., description="Polymarket condition_id")
+    slug: Optional[str] = Field(None, description="Market slug for Gamma API lookups")
     ref_count: int = Field(default=0, description="Reference count — active when > 0")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
@@ -71,7 +72,7 @@ class PolymarketSubscription(BaseModel):
         None, ge=0.0, description="Minimum percentage change to trigger event"
     )
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "allow"}
 
     def is_active(self) -> bool:
         """Check if subscription is active (ref_count > 0)."""

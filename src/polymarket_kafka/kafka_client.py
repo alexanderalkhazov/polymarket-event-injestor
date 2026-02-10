@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from confluent_kafka import Producer
+from confluent_kafka.admin import AdminClient, NewTopic
 
 from .config import KafkaConfig
 from .event_builder import event_to_dict
@@ -14,7 +15,19 @@ logger = logging.getLogger(__name__)
 
 
 class KafkaClient:
-    """Kafka producer wrapper for publishing Polymarket events."""
+    """Kafka producer wrapper for publishing Polymarket conviction events.
+    
+    ===== PRODUCER SIDE OF KAFKA PIPELINE =====
+    
+    This service PUBLISHES events to Kafka topic 'polymarket-events'
+    
+    Downstream services (e.g., strategy-host) CONSUME from the same topic:
+        - They subscribe to 'polymarket-events'
+        - They deserialize JSON events
+        - They route events to trading strategies
+    
+    Our job: Send quality conviction signals. Their job: Use them to trade.
+    """
 
     def __init__(self, config: KafkaConfig) -> None:
         self._config = config
@@ -49,6 +62,44 @@ class KafkaClient:
         )
         self._producer = Producer(producer_conf)
         logger.info("Kafka producer initialized")
+        
+        # Ensure topic exists
+        self._ensure_topic_exists()
+
+    def _ensure_topic_exists(self) -> None:
+        """Create the Kafka topic if it doesn't exist."""
+        try:
+            admin_conf = {
+                "bootstrap.servers": self._config.bootstrap_servers,
+            }
+            if self._config.security_protocol != "PLAINTEXT":
+                admin_conf.update(
+                    {
+                        "security.protocol": self._config.security_protocol,
+                        "sasl.mechanisms": self._config.sasl_mechanisms,
+                        "sasl.username": self._config.sasl_username,
+                        "sasl.password": self._config.sasl_password,
+                    }
+                )
+            
+            admin_client = AdminClient(admin_conf)
+            topic_name = self.topic
+            
+            # Create topic
+            new_topic = NewTopic(topic_name, num_partitions=3, replication_factor=1)
+            fs = admin_client.create_topics([new_topic], operation_timeout=30)
+            
+            for topic, f in fs.items():
+                try:
+                    f.result()
+                    logger.info("Topic '%s' created successfully", topic)
+                except Exception as e:
+                    # Topic may already exist, which is fine
+                    logger.debug("Topic '%s' already exists or creation status: %s", topic, e)
+            
+            admin_client.close()
+        except Exception as e:
+            logger.warning("Failed to ensure topic exists: %s. Proceeding anyway (auto-create may handle it).", e)
 
     @property
     def topic(self) -> str:
@@ -68,7 +119,14 @@ class KafkaClient:
             )
 
     def publish_event(self, event: PolymarketEvent) -> None:
-        """Serialize and publish a PolymarketEvent to Kafka."""
+        """Serialize and publish a PolymarketEvent to Kafka.
+        
+        ===== KAFKA PUBLISHING POINT =====
+        This is the PRODUCER side: events flow from conviction detection -> Kafka
+        Topic: 'polymarket-events' | Partition Key: market_id | Format: JSON | Compression: zstd
+        
+        Downstream CONSUMPTION happens in strategy-host service which subscribes to same topic
+        """
         published_at = datetime.now(timezone.utc)
         payload = event_to_dict(event, published_at=published_at)
         key = payload["market_id"]

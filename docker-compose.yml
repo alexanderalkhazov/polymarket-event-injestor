@@ -19,15 +19,15 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=localhost:9092"]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=localhost:29092"]
       interval: 5s
       timeout: 10s
       retries: 20
@@ -63,7 +63,7 @@ services:
         condition: service_started
     environment:
       # Kafka
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_TOPIC: polymarket-events
       KAFKA_SECURITY_PROTOCOL: PLAINTEXT
       KAFKA_CLIENT_ID: polymarket-kafka-producer
@@ -92,6 +92,35 @@ services:
         done
         echo "MongoDB is ready!"
         python -m polymarket_kafka
+    restart: on-failure
+
+  strategy-injestor:
+    build: .
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: polymarket-events
+      KAFKA_GROUP_ID: strategy-injestor
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      
+      # Polling
+      POLL_INTERVAL_MS: 1000
+      ENVIRONMENT: dev
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for Kafka to be ready..."
+        for idx in {1..30}; do
+          echo "Attempt $$idx to check Kafka..."
+          nc -zv kafka 29092 && break
+          sleep 1
+        done
+        echo "Kafka is ready!"
+        python -m strategy_injestor
     restart: on-failure
 
 volumes:
