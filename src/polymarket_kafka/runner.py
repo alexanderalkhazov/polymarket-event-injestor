@@ -46,9 +46,8 @@ class PolymarketKafkaRunner:
         market_id = sub.market_id
         state = self._states.setdefault(market_id, ConvictionState())
 
-        if not snapshot.active or snapshot.closed:
-            logger.info("Market %s inactive or closed; skipping", market_id)
-            return
+        # Note: Processing regardless of active/closed status for conviction detection
+        logger.debug("Processing market %s (active=%s, closed=%s)", market_id, snapshot.active, snapshot.closed)
 
         try:
             change = detect_conviction_change(sub, snapshot, state)
@@ -86,8 +85,13 @@ class PolymarketKafkaRunner:
 
                     try:
                         snapshots = await self._data_source.fetch_all_markets_async()
+                        logger.info("Fetched %d market snapshots from CLOB API", len(snapshots))
+                        for market_id, snapshot in list(snapshots.items())[:3]:  # Log first 3
+                            logger.info("Snapshot: market_id=%s question=%s yes=%.2f no=%.2f volume=%s liquidity=%s",
+                                        market_id, snapshot.question[:40], snapshot.yes_price, snapshot.no_price,
+                                        snapshot.volume, snapshot.liquidity)
                     except Exception as exc:
-                        logger.error("Failed to fetch markets from Gamma API: %s", exc)
+                        logger.error("Failed to fetch markets from CLOB API: %s", exc)
                         snapshots = {}
 
                     tasks = []

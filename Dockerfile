@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl ca-certificates && \
+    build-essential curl ca-certificates netcat-openbsd && \
     rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./ 
@@ -30,4 +30,3 @@ ENV POLYMARKET_BASE_URL="https://gamma-api.polymarket.com" \
     ENVIRONMENT="dev"
 
 CMD ["python", "-m", "polymarket_kafka"]
-

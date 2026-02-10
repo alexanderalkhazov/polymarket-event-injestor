@@ -26,6 +26,12 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
 
   mongo:
     image: mongo:6
@@ -36,11 +42,25 @@ services:
     volumes:
       - mongo-data:/data/db
 
+  mongo-express:
+    image: mongo-express:latest
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_BASICAUTH: "false"
+    depends_on:
+      - mongo
+    restart: on-failure
+
   polymarket-kafka:
     build: .
     depends_on:
-      - kafka
-      - mongo
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_started
     environment:
       # Kafka
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -60,6 +80,19 @@ services:
       POLYMARKET_RATE_LIMIT_DELAY_MS: 200
       POLL_INTERVAL_SECONDS: 30
       ENVIRONMENT: dev
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for MongoDB to be ready..."
+        for idx in {1..30}; do
+          echo "Attempt $$idx to check MongoDB..."
+          nc -zv mongo 27017 && break
+          sleep 1
+        done
+        echo "MongoDB is ready!"
+        python -m polymarket_kafka
+    restart: on-failure
 
 volumes:
   mongo-data:

@@ -40,7 +40,7 @@ class PolymarketApiError(Exception):
 
 
 class PolymarketClient:
-    """HTTP client wrapper for the Polymarket Gamma API."""
+    """HTTP client wrapper for the Polymarket CLOB API."""
 
     def __init__(self, config: PolymarketConfig) -> None:
         self._config = config
@@ -101,77 +101,93 @@ class PolymarketClient:
         """Parse a Gamma API market object into a MarketSnapshot.
 
         Returns None for markets we skip (non-binary/non-scalar, malformed data).
+        
+        Handles multiple API response formats:
+        - Gamma API format: outcomes/outcomePrices as JSON strings
+        - CLOB API format: tokens array with outcome and price fields
         """
-        market_id = data.get("conditionId") or data.get("condition_id") or ""
+        market_id = data.get("conditionId") or data.get("condition_id") or data.get("id") or ""
         if not market_id:
-            logger.debug("Skipping market with missing conditionId")
+            logger.debug("Skipping market with missing ID field. Data keys: %s", list(data.keys())[:5])
             return None
 
-        question = data.get("question") or ""
+        question = data.get("question") or data.get("title") or ""
 
-        # Parse outcomes and prices (JSON strings)
+        # Try parsing Gamma API format first (outcomes/outcomePrices as JSON strings)
         outcomes_raw = data.get("outcomes")
         prices_raw = data.get("outcomePrices")
-        if not outcomes_raw or not prices_raw:
-            logger.debug("Skipping market %s: missing outcomes or outcomePrices", market_id)
-            return None
-
-        try:
-            outcomes: List[str] = json.loads(outcomes_raw)
-            prices: List[str] = json.loads(prices_raw)
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise PolymarketApiError(
-                f"Failed to parse outcomes/outcomePrices for market {market_id}"
-            ) from exc
-
-        if len(outcomes) != 2 or len(prices) != 2:
-            logger.debug(
-                "Skipping market %s: unsupported outcomes count (expected 2, got %d)",
-                market_id,
-                len(outcomes),
-            )
-            return None
-
-        # Map outcomes to yes/no prices
-        # Binary: Yes/No -> first=yes, second=no
-        # Scalar: Long/Short -> Long=yes_price, Short=no_price
+        
         yes_price: Optional[float] = None
         no_price: Optional[float] = None
-        for i, outcome in enumerate(outcomes):
+        
+        if outcomes_raw and prices_raw:
             try:
-                p = float(prices[i]) if i < len(prices) else None
-            except (ValueError, TypeError):
-                continue
-            if p is None:
-                continue
-            outcome_lower = str(outcome).lower()
-            if outcome_lower == "yes" and yes_price is None:
-                yes_price = p
-            elif outcome_lower == "no" and no_price is None:
-                no_price = p
-            elif outcome_lower == "long" and yes_price is None:
-                yes_price = p
-            elif outcome_lower == "short" and no_price is None:
-                no_price = p
+                outcomes: List[str] = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
+                prices: List[str] = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.debug("Failed to parse outcomes/prices for %s: %s", market_id, exc)
+                outcomes = None
+                prices = None
+        else:
+            outcomes = None
+            prices = None
+
+        # If Gamma format parsing succeeded, map prices
+        if outcomes and prices and len(outcomes) == 2 and len(prices) == 2:
+            for i, outcome in enumerate(outcomes):
+                try:
+                    p = float(prices[i]) if i < len(prices) else None
+                except (ValueError, TypeError):
+                    continue
+                if p is None:
+                    continue
+                outcome_lower = str(outcome).lower()
+                if outcome_lower in ("yes", "long") and yes_price is None:
+                    yes_price = p
+                elif outcome_lower in ("no", "short") and no_price is None:
+                    no_price = p
+        
+        # Fallback: Try CLOB API format (tokens array)
+        if yes_price is None or no_price is None:
+            tokens = data.get("tokens", [])
+            if isinstance(tokens, list):
+                for token in tokens:
+                    if not isinstance(token, dict):
+                        continue
+                    outcome = str(token.get("outcome", "")).lower()
+                    try:
+                        price = float(token.get("price", 0))
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    if outcome in ("yes", "long") and yes_price is None:
+                        yes_price = price
+                    elif outcome in ("no", "short") and no_price is None:
+                        no_price = price
 
         if yes_price is None or no_price is None:
             logger.debug(
-                "Skipping market %s: could not map Yes/No or Long/Short prices (outcomes=%s)",
+                "Skipping market %s: could not extract Yes/No prices (outcomes=%s, tokens=%s)",
                 market_id,
                 outcomes,
+                data.get("tokens"),
             )
             return None
 
         # Volume and liquidity: prefer numeric fields
-        volume = data.get("volumeNum")
-        if volume is None:
-            raw = data.get("volume")
-            volume = float(raw) if raw is not None else None
+        volume = data.get("volumeNum") or data.get("volume")
+        if volume is not None:
+            try:
+                volume = float(volume)
+            except (ValueError, TypeError):
+                volume = None
 
-        liquidity = data.get("liquidityNum")
-        if liquidity is None:
-            raw = data.get("liquidity")
-            liquidity = float(raw) if raw is not None else None
+        liquidity = data.get("liquidityNum") or data.get("liquidity")
+        if liquidity is not None:
+            try:
+                liquidity = float(liquidity)
+            except (ValueError, TypeError):
+                liquidity = None
 
         active = bool(data.get("active", True))
         closed = bool(data.get("closed", False))
@@ -189,7 +205,7 @@ class PolymarketClient:
         )
 
     def fetch_all_markets(self) -> Dict[str, MarketSnapshot]:
-        """Fetch all markets from the Gamma API and return a dict keyed by conditionId."""
+        """Fetch all markets from the CLOB API and return a dict keyed by condition_id."""
         response = self._request_with_retries("GET", "/markets")
         try:
             data = response.json()
@@ -198,22 +214,38 @@ class PolymarketClient:
 
         if not isinstance(data, list):
             raise PolymarketApiError(
-                f"Expected array response from Gamma API, got {type(data).__name__}"
+                f"Expected array response from CLOB API, got {type(data).__name__}"
             )
 
+        logger.info("Fetched %d markets from Polymarket API", len(data))
+        
         result: Dict[str, MarketSnapshot] = {}
-        for item in data:
+        for idx, item in enumerate(data):
             if not isinstance(item, dict):
                 continue
             try:
                 snapshot = self._parse_gamma_market(item)
                 if snapshot is not None:
                     result[snapshot.market_id] = snapshot
-            except PolymarketApiError:
+                    if idx < 3:  # Log first 3 parsed markets
+                        logger.debug(
+                            "Parsed market %s: %s (YES=%.2f, NO=%.2f)",
+                            snapshot.market_id,
+                            snapshot.question[:50],
+                            snapshot.yes_price,
+                            snapshot.no_price,
+                        )
+            except PolymarketApiError as exc:
+                logger.error("API parsing error for market %s: %s", item.get("conditionId"), exc)
                 raise
             except Exception as exc:
-                logger.warning("Failed to parse market %s: %s", item.get("conditionId"), exc)
+                logger.warning(
+                    "Failed to parse market %s: %s",
+                    item.get("conditionId") or item.get("id"),
+                    exc,
+                )
 
+        logger.info("Successfully parsed %d valid markets", len(result))
         return result
 
     async def fetch_all_markets_async(self) -> Dict[str, MarketSnapshot]:

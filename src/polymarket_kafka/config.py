@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 @dataclass
 class PolymarketConfig:
-    base_url: str = "https://gamma-api.polymarket.com"
+    base_url: str = "https://clob.polymarket.com"
     request_timeout_seconds: int = 30
     rate_limit_delay_ms: int = 200
 
