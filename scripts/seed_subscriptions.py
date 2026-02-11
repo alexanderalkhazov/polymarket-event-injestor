@@ -5,6 +5,7 @@ Run this after Docker containers are up: python seed_subscriptions.py
 """
 
 import json
+import os
 import re
 import urllib.request
 import time
@@ -12,9 +13,9 @@ from datetime import datetime, timezone
 from pymongo import MongoClient
 
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=500"
-MONGODB_URI = "mongodb://localhost:27017"
-MONGODB_DB = "horizon"
-MONGODB_COLLECTION = "polymarket_subscriptions"
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DB = os.environ.get("MONGODB_DATABASE", "horizon")
+MONGODB_COLLECTION = os.environ.get("MONGODB_COLLECTION", "polymarket_subscriptions")
 
 # Default conviction thresholds
 DEFAULT_CONVICTION_THRESHOLD = 0.10  # 10 percentage points

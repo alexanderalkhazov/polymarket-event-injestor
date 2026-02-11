@@ -54,6 +54,28 @@ services:
       - mongo
     restart: on-failure
 
+  seed-subscriptions:
+    build: .
+    depends_on:
+      mongo:
+        condition: service_started
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DATABASE: horizon
+      MONGODB_COLLECTION: polymarket_subscriptions
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for MongoDB to be ready..."
+        for idx in {1..30}; do
+          nc -zv mongo 27017 && break
+          sleep 1
+        done
+        echo "MongoDB is ready! Running seed script..."
+        python /app/scripts/seed_subscriptions.py
+    restart: "no"
+
   polymarket-kafka:
     build: .
     depends_on:
@@ -61,6 +83,8 @@ services:
         condition: service_healthy
       mongo:
         condition: service_started
+      seed-subscriptions:
+        condition: service_completed_successfully
     environment:
       # Kafka
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
