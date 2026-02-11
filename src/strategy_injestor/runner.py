@@ -5,6 +5,7 @@ import json
 import logging
 
 from .config import AppConfig
+from .couchbase_client import CouchbaseClient
 from .kafka_consumer import KafkaConsumer
 
 logger = logging.getLogger(__name__)
@@ -24,9 +25,10 @@ class StrategyInjestorRunner:
     4. In production: events would be routed to trading strategy evaluators
     """
 
-    def __init__(self, config: AppConfig, kafka_consumer: KafkaConsumer) -> None:
+    def __init__(self, config: AppConfig, kafka_consumer: KafkaConsumer, couchbase_client: CouchbaseClient) -> None:
         self._config = config
         self._kafka_consumer = kafka_consumer
+        self._couchbase = couchbase_client
         self._stop_requested = False
         self._polls_since_last_event = 0
 
@@ -69,6 +71,12 @@ class StrategyInjestorRunner:
                         event.get("no_price", 0.0),
                     )
 
+                    # Persist to Couchbase (atomic upsert per market + event history)
+                    try:
+                        self._couchbase.upsert_event(event)
+                    except Exception as cb_exc:
+                        logger.error("Failed to persist event to Couchbase: %s", cb_exc)
+
                     # Pretty print the full event
                     logger.info("Full event: %s", json.dumps(event, indent=2, default=str))
 
@@ -77,5 +85,6 @@ class StrategyInjestorRunner:
                     continue
 
         finally:
-            logger.info("Runner stopping; closing Kafka consumer")
+            logger.info("Runner stopping; closing Kafka consumer and Couchbase")
             self._kafka_consumer.close()
+            self._couchbase.close()

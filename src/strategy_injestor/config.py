@@ -21,8 +21,17 @@ class KafkaConfig:
 
 
 @dataclass
+class CouchbaseConfig:
+    connection_string: str
+    username: str
+    password: str
+    bucket: str
+
+
+@dataclass
 class AppConfig:
     kafka: KafkaConfig
+    couchbase: CouchbaseConfig
     environment: str = "dev"
     poll_interval_ms: int = 1000  # Poll interval in milliseconds
     
@@ -59,8 +68,16 @@ def load_config() -> AppConfig:
         sasl_password=_get_env("KAFKA_SASL_PASSWORD", ""),
     )
 
+    couchbase = CouchbaseConfig(
+        connection_string=_get_env("COUCHBASE_CONNECTION_STRING", "couchbase://couchbase"),
+        username=_get_env("COUCHBASE_USERNAME", "Administrator"),
+        password=_get_env("COUCHBASE_PASSWORD", "password"),
+        bucket=_get_env("COUCHBASE_BUCKET", "polymarket"),
+    )
+
     return AppConfig(
         kafka=kafka,
+        couchbase=couchbase,
         environment=_get_env("ENVIRONMENT", "dev"),
         poll_interval_ms=int(_get_env("POLL_INTERVAL_MS", "1000")),
     )
