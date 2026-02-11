@@ -16,6 +16,10 @@ export interface AppConfig {
     uri: string;
     db: string;
   };
+  jwt: {
+    secret: string;
+    expiresIn: string;
+  };
   api_timeout: number;
 }
 
@@ -32,6 +36,10 @@ const config: AppConfig = {
   mongodb: {
     uri: process.env.MONGODB_URI || 'mongodb://localhost:27017',
     db: process.env.MONGODB_DB || 'polymarket',
+  },
+  jwt: {
+    secret: process.env.JWT_SECRET || 'default-secret-change-in-production',
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
   api_timeout: parseInt(process.env.API_TIMEOUT || '30000', 10),
 };

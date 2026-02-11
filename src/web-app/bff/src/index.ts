@@ -2,10 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import config from './config';
+import { connectDB } from './db';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import exampleRoutes from './routes/example.routes';
+import authRoutes from './routes/auth.routes';
 
 const app = express();
+
+/**
+ * Database Connection
+ */
+connectDB();
 
 /**
  * Middleware
@@ -24,6 +31,7 @@ app.use((req, res, next) => {
 /**
  * Routes
  */
+app.use('/api/auth', authRoutes);
 app.use('/api', exampleRoutes);
 
 // Root endpoint
