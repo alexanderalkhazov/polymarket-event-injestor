@@ -6,6 +6,7 @@ import signal
 import sys
 
 from .config import load_config
+from .couchbase_client import CouchbaseClient
 from .kafka_consumer import KafkaConsumer
 from .runner import StrategyInjestorRunner
 
@@ -24,8 +25,14 @@ async def main() -> None:
 
     logger.info("Initializing services...")
     kafka_consumer = KafkaConsumer(config.kafka)
+    couchbase_client = CouchbaseClient(
+        connection_string=config.couchbase.connection_string,
+        username=config.couchbase.username,
+        password=config.couchbase.password,
+        bucket_name=config.couchbase.bucket,
+    )
 
-    runner = StrategyInjestorRunner(config, kafka_consumer)
+    runner = StrategyInjestorRunner(config, kafka_consumer, couchbase_client)
 
     def handle_signal(signum: int, frame) -> None:  # type: ignore[no-untyped-def]
         """Handle SIGINT/SIGTERM gracefully."""

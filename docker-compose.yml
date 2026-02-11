@@ -54,6 +54,65 @@ services:
       - mongo
     restart: on-failure
 
+  couchbase:
+    image: couchbase:community-7.6.2
+    ports:
+      - "8091:8091"   # Web UI
+      - "8092:8092"
+      - "8093:8093"   # N1QL
+      - "8094:8094"
+      - "11210:11210" # KV
+    volumes:
+      - couchbase-data:/opt/couchbase/var
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8091/pools"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  couchbase-init:
+    image: curlimages/curl:latest
+    depends_on:
+      couchbase:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo "Step 1: Setting up node services..."
+        curl -sf -X POST http://couchbase:8091/node/controller/setupServices \
+          -d "services=kv%2Cn1ql%2Cindex" || echo "Services may already be set"
+        sleep 2
+
+        echo "Step 2: Setting memory quotas..."
+        curl -sf -X POST http://couchbase:8091/pools/default \
+          -d "memoryQuota=256" \
+          -d "indexMemoryQuota=256" || echo "Quotas may already be set"
+        sleep 1
+
+        echo "Step 3: Setting admin credentials..."
+        curl -sf -X POST http://couchbase:8091/settings/web \
+          -d "password=password" \
+          -d "username=Administrator" \
+          -d "port=SAME" || echo "Credentials may already be set"
+        sleep 2
+
+        echo "Step 4: Creating bucket 'polymarket'..."
+        curl -sf -X POST http://couchbase:8091/pools/default/buckets \
+          -u Administrator:password \
+          -d "name=polymarket" \
+          -d "ramQuota=128" \
+          -d "bucketType=couchbase" \
+          -d "flushEnabled=1" || echo "Bucket may already exist"
+        sleep 3
+
+        echo "Verifying..."
+        curl -sf -u Administrator:password http://couchbase:8091/pools/default/buckets | grep -q polymarket \
+          && echo "Couchbase init COMPLETE — bucket 'polymarket' ready." \
+          || echo "WARNING: bucket verification failed"
+    restart: "no"
+
   seed-subscriptions:
     build: .
     depends_on:
@@ -123,12 +182,20 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      couchbase-init:
+        condition: service_completed_successfully
     environment:
       # Kafka
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_TOPIC: polymarket-events
       KAFKA_GROUP_ID: strategy-injestor
       KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+
+      # Couchbase
+      COUCHBASE_CONNECTION_STRING: couchbase://couchbase
+      COUCHBASE_USERNAME: Administrator
+      COUCHBASE_PASSWORD: password
+      COUCHBASE_BUCKET: polymarket
       
       # Polling
       POLL_INTERVAL_MS: 1000
@@ -149,3 +216,4 @@ services:
 
 volumes:
   mongo-data:
+  couchbase-data:
