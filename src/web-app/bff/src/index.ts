@@ -6,6 +6,7 @@ import { connectDB } from './db';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import exampleRoutes from './routes/example.routes';
 import authRoutes from './routes/auth.routes';
+import chatRoutes from './routes/chat.routes';
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.use((req, res, next) => {
  * Routes
  */
 app.use('/api/auth', authRoutes);
+app.use('/api/chat', chatRoutes);
 app.use('/api', exampleRoutes);
 
 // Root endpoint

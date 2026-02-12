@@ -20,6 +20,9 @@ export interface AppConfig {
     secret: string;
     expiresIn: string;
   };
+  groq: {
+    apiKey: string;
+  };
   api_timeout: number;
 }
 
@@ -40,6 +43,9 @@ const config: AppConfig = {
   jwt: {
     secret: process.env.JWT_SECRET || 'default-secret-change-in-production',
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  },
+  groq: {
+    apiKey: process.env.GROQ_API_KEY || '',
   },
   api_timeout: parseInt(process.env.API_TIMEOUT || '30000', 10),
 };

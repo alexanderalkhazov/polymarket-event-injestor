@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useAuth } from '../context/AuthContext';
+import { chatAPI } from '../services/api';
 import './Dashboard.css';
 
 interface Message {
@@ -12,16 +13,21 @@ interface Message {
   timestamp: string;
 }
 
+interface Conversation {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+  lastMessage: string;
+}
+
 export const Dashboard = () => {
   const { user } = useAuth();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      role: 'assistant',
-      content: `Hello ${user?.name?.split(' ')[0] || 'there'}! 👋\n\nI'm your Polymarket AI assistant. I can help you with:\n\n• Market analysis and insights\n• Trading strategies and recommendations\n• Real-time market data and trends\n• Portfolio tracking and optimization\n\nWhat would you like to know about today?`,
-      timestamp: 'Just now',
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -32,66 +38,156 @@ export const Dashboard = () => {
     scrollToBottom();
   }, [messages]);
 
-  const handleSendMessage = (content: string) => {
+  // Load conversations on mount
+  useEffect(() => {
+    loadConversations();
+  }, []);
+
+  const loadConversations = async () => {
+    try {
+      setIsLoadingConversations(true);
+      const response = await chatAPI.getConversations();
+      if (response.success && response.data) {
+        setConversations(response.data);
+      }
+    } catch (error) {
+      console.error('Failed to load conversations:', error);
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  };
+
+  const loadConversation = async (conversationId: string) => {
+    try {
+      setIsLoading(true);
+      const response = await chatAPI.getConversation(conversationId);
+      if (response.success && response.data) {
+        const loadedMessages: Message[] = response.data.messages.map((msg, idx) => ({
+          id: idx + 1,
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+          timestamp: new Date(msg.timestamp).toLocaleTimeString(),
+        }));
+        setMessages(loadedMessages);
+        setCurrentConversationId(conversationId);
+      }
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSendMessage = async (content: string) => {
     const newMessage: Message = {
       id: messages.length + 1,
       role: 'user',
       content,
-      timestamp: 'Just now',
+      timestamp: new Date().toLocaleTimeString(),
     };
 
     setMessages([...messages, newMessage]);
+    setIsLoading(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiResponse: Message = {
+    try {
+      console.log('Sending message:', { content, conversationId: currentConversationId });
+      
+      const response = await chatAPI.sendMessage(content, currentConversationId || undefined);
+      
+      console.log('Received response:', response);
+      
+      if (response.success && response.data) {
+        const aiResponse: Message = {
+          id: messages.length + 2,
+          role: 'assistant',
+          content: response.data.message,
+          timestamp: new Date(response.data.timestamp).toLocaleTimeString(),
+        };
+        setMessages((prev) => [...prev, aiResponse]);
+        
+        // Update conversation ID if this was a new conversation
+        if (!currentConversationId && response.data.conversationId) {
+          setCurrentConversationId(response.data.conversationId);
+          console.log('New conversation created:', response.data.conversationId);
+        }
+        
+        // Reload conversations to update sidebar
+        await loadConversations();
+      } else {
+        throw new Error('Invalid response from server');
+      }
+    } catch (error: any) {
+      console.error('❌ Chat error:', error);
+      console.error('Error details:', error.response?.data);
+      
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to send message';
+      const errorResponse: Message = {
         id: messages.length + 2,
         role: 'assistant',
-        content: getAIResponse(content),
-        timestamp: 'Just now',
+        content: `❌ **Error:** ${errorMessage}\n\n**Troubleshooting:**\n1. ✅ Backend server running on port 5000\n2. ✅ You are logged in\n3. ⚠️  Check Groq API key in \`.env\` (free at https://console.groq.com)\n4. ⚠️  Check MongoDB has Polymarket events\n\n*Tip: Even without API key, you should get fallback responses!*`,
+        timestamp: new Date().toLocaleTimeString(),
       };
-      setMessages((prev) => [...prev, aiResponse]);
-    }, 1000);
-  };
-
-  const getAIResponse = (userMessage: string): string => {
-    const lower = userMessage.toLowerCase();
-    
-    if (lower.includes('market') || lower.includes('price')) {
-      return "Based on current market data, I can provide you with real-time analysis. Which specific market are you interested in? I can analyze trends, volume, and sentiment for any Polymarket prediction market.";
-    } else if (lower.includes('strategy') || lower.includes('trade')) {
-      return "For trading strategies, I recommend considering:\n\n1. Market liquidity analysis\n2. Historical price patterns\n3. Event probability assessment\n4. Diversification across multiple markets\n\nWould you like me to elaborate on any of these strategies?";
-    } else if (lower.includes('help')) {
-      return "I can assist you with:\n\n• Current market trends and analysis\n• Portfolio recommendations\n• Risk assessment\n• Market predictions and insights\n• Trading volume analysis\n\nWhat specific area would you like to explore?";
-    } else {
-      return "That's an interesting question! I can help you explore Polymarket data and provide insights. Could you provide more details about what you'd like to know?\n\nYou can ask me about specific markets, trading strategies, or market analysis.";
+      setMessages((prev) => [...prev, errorResponse]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleNewChat = () => {
-    setMessages([
-      {
-        id: 1,
-        role: 'assistant',
-        content: `Starting a new conversation! How can I help you with Polymarket today?`,
-        timestamp: 'Just now',
-      },
-    ]);
+    setMessages([]);
+    setCurrentConversationId(null);
   };
+
+  const handleSelectConversation = (conversationId: string) => {
+    loadConversation(conversationId);
+  };
+
+  const handleDeleteConversation = async (conversationId: string) => {
+    try {
+      await chatAPI.deleteConversation(conversationId);
+      
+      // If deleted conversation was active, clear it
+      if (currentConversationId === conversationId) {
+        handleNewChat();
+      }
+      
+      // Reload conversations
+      await loadConversations();
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+    }
+  };
+
+  // Show welcome message when no conversation is active
+  const displayMessages = messages.length > 0 ? messages : [
+    {
+      id: 1,
+      role: 'assistant' as const,
+      content: `Hello ${user?.name?.split(' ')[0] || 'there'}! 👋\n\nI'm your **Polymarket AI Assistant** powered by real-time market data and AI analysis.\n\n**I can help you with:**\n\n• 📊 **Market Analysis** - AI-powered insights on prediction markets\n• 💹 **Trading Strategies** - Recommendations based on latest 100 market events\n• ⚠️ **Risk Assessment** - Understand market trends and volatility\n• 📈 **Real-time Data** - Analysis of current market conditions\n\n**Try asking:**\n- "Should I buy or sell gold futures?"\n- "What are the trending markets?"\n- "Analyze political prediction markets"\n- "Give me a trading strategy for crypto"\n\n**Setup Status:**\n${conversations.length > 0 ? '✅ Conversations loaded from database' : '⚠️  No previous conversations'}\n✅ Backend connected\n⚠️  Get free Groq API key for full AI features\n\n${conversations.length > 0 ? 'Select a conversation from the sidebar or start a new one!' : 'Start chatting below!'}`,
+      timestamp: 'Just now',
+    },
+  ];
 
   return (
     <div className="dashboard-container">
-      <Sidebar onNewChat={handleNewChat} />
+      <Sidebar 
+        conversations={conversations}
+        currentConversationId={currentConversationId}
+        onNewChat={handleNewChat}
+        onSelectConversation={handleSelectConversation}
+        onDeleteConversation={handleDeleteConversation}
+        isLoading={isLoadingConversations}
+      />
       <div className="chat-main">
         <div className="chat-header">
           <h1>Polymarket AI Assistant</h1>
           <div className="chat-status">
             <span className="status-indicator"></span>
-            <span>Online</span>
+            <span>AI Powered</span>
           </div>
         </div>
         <div className="chat-messages">
-          {messages.map((message) => (
+          {displayMessages.map((message) => (
             <ChatMessage
               key={message.id}
               role={message.role}
@@ -99,9 +195,23 @@ export const Dashboard = () => {
               timestamp={message.timestamp}
             />
           ))}
+          {isLoading && (
+            <div className="loading-indicator">
+              <div className="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div className="loading-text">
+                <div className="loading-step">📊 Fetching Polymarket data...</div>
+                <div className="loading-step">🤖 AI analyzing market trends...</div>
+                <div className="loading-step">📈 Generating recommendation...</div>
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
-        <ChatInput onSend={handleSendMessage} />
+        <ChatInput onSend={handleSendMessage} disabled={isLoading} />
       </div>
     </div>
   );
