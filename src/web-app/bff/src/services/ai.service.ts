@@ -1,5 +1,5 @@
 import config from '../config';
-import mongoose from '../db';
+import { queryCouchbase } from '../couchbase';
 
 interface PolymarketEvent {
   market_id: string;
@@ -12,46 +12,74 @@ interface PolymarketEvent {
   conviction_level?: string;
 }
 
+interface CouchbasePolymarketEvent {
+  market_id?: string;
+  market_slug?: string;
+  question?: string;
+  yes_price?: number;
+  current_price?: number;
+  volume?: number;
+  timestamp?: string;
+  outcome?: string;
+  conviction_direction?: string;
+  conviction_magnitude_pct?: number;
+}
+
 class AIService {
-  // Retrieve recent Polymarket events from MongoDB
+  // Retrieve recent Polymarket events from Couchbase
   async getRecentEvents(limit: number = 100): Promise<PolymarketEvent[]> {
     try {
-      const db = mongoose.connection.db;
-      
-      if (!db) {
-        console.log('Database not connected, returning empty events');
-        return [];
+      const bucketName = config.couchbase.bucket;
+
+      let rows = await queryCouchbase<CouchbasePolymarketEvent>(
+        `SELECT d.*
+         FROM \`${bucketName}\` AS d
+         WHERE d.type = "conviction_event"
+         ORDER BY STR_TO_MILLIS(d.timestamp) DESC
+         LIMIT $limit`,
+        { limit }
+      );
+
+      if (rows.length === 0) {
+        rows = await queryCouchbase<CouchbasePolymarketEvent>(
+          `SELECT d.*
+           FROM \`${bucketName}\` AS d
+           WHERE d.type = "market_latest"
+           ORDER BY STR_TO_MILLIS(d.timestamp) DESC
+           LIMIT $limit`,
+          { limit }
+        );
       }
 
-      // Try to find events in the database
-      const collections = await db.listCollections().toArray();
-      const collectionNames = collections.map(c => c.name);
-      
-      console.log('Available collections:', collectionNames);
+      const events: PolymarketEvent[] = rows.map((row) => {
+        const marketId = row.market_id || 'unknown';
+        const currentPrice =
+          typeof row.yes_price === 'number'
+            ? row.yes_price
+            : typeof row.current_price === 'number'
+              ? row.current_price
+              : 0;
+        const convictionLevel =
+          typeof row.conviction_magnitude_pct === 'number'
+            ? `${row.conviction_magnitude_pct.toFixed(2)}%`
+            : undefined;
 
-      // Check for polymarket events in various possible collections
-      let events: any[] = [];
-      
-      if (collectionNames.includes('polymarket_events')) {
-        events = await db
-          .collection('polymarket_events')
-          .find({})
-          .sort({ timestamp: -1 })
-          .limit(limit)
-          .toArray();
-      } else if (collectionNames.includes('events')) {
-        events = await db
-          .collection('events')
-          .find({})
-          .sort({ timestamp: -1 })
-          .limit(limit)
-          .toArray();
-      }
+        return {
+          market_id: marketId,
+          market_slug: row.market_slug || marketId,
+          question: row.question || marketId,
+          current_price: currentPrice,
+          volume: typeof row.volume === 'number' ? row.volume : 0,
+          timestamp: row.timestamp ? new Date(row.timestamp) : new Date(),
+          outcome: row.conviction_direction || row.outcome || 'yes',
+          conviction_level: convictionLevel,
+        };
+      });
 
-      console.log(`Retrieved ${events.length} events from database`);
+      console.log(`Retrieved ${events.length} events from Couchbase`);
       return events;
     } catch (error) {
-      console.error('Error retrieving events:', error);
+      console.error('Error retrieving events from Couchbase:', error);
       return [];
     }
   }
