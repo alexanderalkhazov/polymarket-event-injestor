@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { MainNav } from './MainNav';
 import { chatAPI } from '../services/api';
 import './PollyMarketEvents.css';
 
@@ -22,7 +22,6 @@ export const PollyMarketEvents = () => {
     { value: '24h', label: 'Last 24h' },
     { value: '7d', label: 'Last 7d' },
   ];
-  const navigate = useNavigate();
   const [events, setEvents] = useState<MarketEvent[]>([]);
   const [selectedCount, setSelectedCount] = useState<number>(50);
   const [searchText, setSearchText] = useState('');
@@ -123,111 +122,113 @@ export const PollyMarketEvents = () => {
   };
 
   return (
-    <div className="events-page">
-      <div className="events-header">
-        <div>
-          <h1>Polly Market Events</h1>
-          <div className="events-subtitle">Showing {hotEvents.length} of {filteredEvents.length} filtered events</div>
+    <div className="events-layout">
+      <MainNav />
+      <div className="events-page">
+        <div className="events-header">
+          <div>
+            <h1>Pollymarket Events</h1>
+            <div className="events-subtitle">Showing {hotEvents.length} of {filteredEvents.length} filtered events</div>
+          </div>
+          <div className="events-actions">
+            <select
+              className="events-select"
+              value={selectedCount}
+              onChange={(e) => setSelectedCount(Number(e.target.value))}
+            >
+              {countOptions.map((option) => (
+                <option key={option} value={option}>
+                  Top {option}
+                </option>
+              ))}
+            </select>
+            <button onClick={() => loadEvents(selectedCount)} className="events-btn">Refresh</button>
+          </div>
         </div>
-        <div className="events-actions">
+      
+        <div className="events-filters">
+          <input
+            className="events-input"
+            type="text"
+            placeholder="Search market question/slug/id"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+          <input
+            className="events-input"
+            type="number"
+            min="0"
+            step="1"
+            placeholder="Min volume"
+            value={minVolume}
+            onChange={(e) => setMinVolume(e.target.value)}
+          />
           <select
             className="events-select"
-            value={selectedCount}
-            onChange={(e) => setSelectedCount(Number(e.target.value))}
+            value={selectedIndication}
+            onChange={(e) => setSelectedIndication(e.target.value as 'all' | 'yes' | 'no' | 'neutral')}
           >
-            {countOptions.map((option) => (
-              <option key={option} value={option}>
-                Top {option}
+            <option value="all">All Indications</option>
+            <option value="yes">Bullish</option>
+            <option value="no">Bearish</option>
+            <option value="neutral">Neutral</option>
+          </select>
+          <select
+            className="events-select"
+            value={selectedTime}
+            onChange={(e) => setSelectedTime(e.target.value as 'all' | '1h' | '24h' | '7d')}
+          >
+            {timeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
-          <button onClick={() => loadEvents(selectedCount)} className="events-btn">Refresh</button>
-          <button onClick={() => navigate('/dashboard')} className="events-btn secondary">Back to Chat</button>
+          <button className="events-btn secondary" onClick={resetFilters}>Reset</button>
         </div>
-      </div>
 
-      <div className="events-filters">
-        <input
-          className="events-input"
-          type="text"
-          placeholder="Search market question/slug/id"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-        />
-        <input
-          className="events-input"
-          type="number"
-          min="0"
-          step="1"
-          placeholder="Min volume"
-          value={minVolume}
-          onChange={(e) => setMinVolume(e.target.value)}
-        />
-        <select
-          className="events-select"
-          value={selectedIndication}
-          onChange={(e) => setSelectedIndication(e.target.value as 'all' | 'yes' | 'no' | 'neutral')}
-        >
-          <option value="all">All Indications</option>
-          <option value="yes">Bullish</option>
-          <option value="no">Bearish</option>
-          <option value="neutral">Neutral</option>
-        </select>
-        <select
-          className="events-select"
-          value={selectedTime}
-          onChange={(e) => setSelectedTime(e.target.value as 'all' | '1h' | '24h' | '7d')}
-        >
-          {timeOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <button className="events-btn secondary" onClick={resetFilters}>Reset</button>
+        {isLoading ? (
+          <div className="events-state">Loading recent events...</div>
+        ) : error ? (
+          <div className="events-state error">{error}</div>
+        ) : hotEvents.length === 0 ? (
+          <div className="events-state">No events found.</div>
+        ) : (
+          <div className="events-table-wrap">
+            <table className="events-table">
+              <thead>
+                <tr>
+                  <th>Market</th>
+                  <th>Indication</th>
+                  <th>Price</th>
+                  <th>Volume</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hotEvents.map((event, idx) => {
+                  const indication = getIndication(event.outcome);
+                  const price = Number(event.current_price || 0) * 100;
+                  return (
+                    <tr key={`${event.market_id}-${idx}`}>
+                      <td>
+                        <div className="market-question">{event.question || event.market_slug || event.market_id}</div>
+                        <div className="market-sub">{event.market_slug || event.market_id}</div>
+                      </td>
+                      <td>
+                        <span className={`indication ${indication.className}`}>{indication.label}</span>
+                      </td>
+                      <td>{price.toFixed(1)}%</td>
+                      <td>${Number(event.volume || 0).toLocaleString()}</td>
+                      <td>{new Date(event.timestamp).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
-
-      {isLoading ? (
-        <div className="events-state">Loading recent events...</div>
-      ) : error ? (
-        <div className="events-state error">{error}</div>
-      ) : hotEvents.length === 0 ? (
-        <div className="events-state">No events found.</div>
-      ) : (
-        <div className="events-table-wrap">
-          <table className="events-table">
-            <thead>
-              <tr>
-                <th>Market</th>
-                <th>Indication</th>
-                <th>Price</th>
-                <th>Volume</th>
-                <th>Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {hotEvents.map((event, idx) => {
-                const indication = getIndication(event.outcome);
-                const price = Number(event.current_price || 0) * 100;
-                return (
-                  <tr key={`${event.market_id}-${idx}`}>
-                    <td>
-                      <div className="market-question">{event.question || event.market_slug || event.market_id}</div>
-                      <div className="market-sub">{event.market_slug || event.market_id}</div>
-                    </td>
-                    <td>
-                      <span className={`indication ${indication.className}`}>{indication.label}</span>
-                    </td>
-                    <td>{price.toFixed(1)}%</td>
-                    <td>${Number(event.volume || 0).toLocaleString()}</td>
-                    <td>{new Date(event.timestamp).toLocaleString()}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 };

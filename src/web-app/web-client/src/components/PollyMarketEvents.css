@@ -1,8 +1,17 @@
-.events-page {
+.events-layout {
   height: 100vh;
+  background: #0f1115;
+  display: flex;
+  flex-direction: row;
+}
+
+.events-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   box-sizing: border-box;
-  background: #141414;
-  color: #fff;
+  background: #121721;
+  color: #eef2ff;
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -25,7 +34,7 @@
 
 .events-subtitle {
   margin-top: 6px;
-  color: #999;
+  color: #9aa6bd;
   font-size: 13px;
 }
 
@@ -47,40 +56,40 @@
 .events-select {
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid #3a3a3a;
-  background: #2a2a2a;
-  color: #fff;
+  border: 1px solid #2f3a4d;
+  background: #1a2230;
+  color: #eef2ff;
   cursor: pointer;
 }
 
 .events-input {
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid #3a3a3a;
-  background: #2a2a2a;
-  color: #fff;
+  border: 1px solid #2f3a4d;
+  background: #1a2230;
+  color: #eef2ff;
 }
 
 .events-input::placeholder {
-  color: #8a8a8a;
+  color: #8f9aaf;
 }
 
 .events-select:focus {
   outline: none;
-  border-color: #5a5a5a;
+  border-color: #ffffff;
 }
 
 .events-input:focus {
   outline: none;
-  border-color: #5a5a5a;
+  border-color: #ffffff;
 }
 
 .events-btn {
   padding: 10px 14px;
   border-radius: 8px;
-  border: 1px solid #3a3a3a;
-  background: #2a2a2a;
-  color: #fff;
+  border: 1px solid #2f3a4d;
+  background: #1c2331;
+  color: #eef2ff;
   cursor: pointer;
 }
 
@@ -89,7 +98,7 @@
 }
 
 .events-btn:hover {
-  background: #333;
+  background: #243144;
 }
 
 @media (max-width: 1000px) {
@@ -101,10 +110,10 @@
 .events-state {
   padding: 24px;
   text-align: center;
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
+  background: #171d28;
+  border: 1px solid #2a3140;
   border-radius: 10px;
-  color: #bbb;
+  color: #9aa6bd;
 }
 
 .events-state.error {
@@ -114,10 +123,10 @@
 .events-table-wrap {
   flex: 1;
   min-height: 0;
-  border: 1px solid #2a2a2a;
+  border: 1px solid #2a3140;
   border-radius: 10px;
   overflow: auto;
-  background: #1a1a1a;
+  background: #171d28;
 }
 
 .events-table {
@@ -129,14 +138,14 @@
 .events-table th,
 .events-table td {
   padding: 12px;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid #2a3140;
   text-align: left;
   font-size: 14px;
 }
 
 .events-table th {
-  background: #202020;
-  color: #aaa;
+  background: #1b2230;
+  color: #9aa6bd;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -144,11 +153,11 @@
 
 .market-question {
   font-weight: 600;
-  color: #fff;
+  color: #eef2ff;
 }
 
 .market-sub {
-  color: #777;
+  color: #8f9aaf;
   font-size: 12px;
   margin-top: 3px;
 }

@@ -1,7 +1,7 @@
 .dashboard-container {
   display: flex;
   height: 100vh;
-  background: #0f0f0f;
+  background: #0f1115;
   overflow: hidden;
 }
 
@@ -11,23 +11,23 @@
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  background: #141414;
+  background: #121721;
 }
 
 .chat-header {
   padding: 20px 32px;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid #2a3140;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #1a1a1a;
+  background: #171d28;
 }
 
 .chat-header h1 {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #fff;
+  color: #eef2ff;
 }
 
 .chat-status {
@@ -35,28 +35,13 @@
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #888;
-}
-
-.events-link-btn {
-  margin-right: 8px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid #3a3a3a;
-  background: #2a2a2a;
-  color: #fff;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.events-link-btn:hover {
-  background: #333;
+  color: #9aa6bd;
 }
 
 .status-indicator {
   width: 8px;
   height: 8px;
-  background: #22c55e;
+  background: #ffffff;
   border-radius: 50%;
   animation: pulse 2s ease-in-out infinite;
 }
@@ -89,12 +74,12 @@
 }
 
 .chat-messages::-webkit-scrollbar-thumb {
-  background: #2a2a2a;
+  background: #3a465e;
   border-radius: 4px;
 }
 
 .chat-messages::-webkit-scrollbar-thumb:hover {
-  background: #3a3a3a;
+  background: #4a5873;
 }
 
 .loading-indicator {
@@ -102,7 +87,7 @@
   align-items: flex-start;
   gap: 16px;
   padding: 24px 0;
-  color: #888;
+  color: #9aa6bd;
   font-size: 14px;
 }
 
@@ -116,7 +101,7 @@
 .loading-dots span {
   width: 8px;
   height: 8px;
-  background: #667eea;
+  background: #ffffff;
   border-radius: 50%;
   animation: bounce 1.4s infinite ease-in-out both;
 }
@@ -136,7 +121,7 @@
 }
 
 .loading-step {
-  color: #aaa;
+  color: #8f9aaf;
   font-size: 13px;
   opacity: 0;
   animation: fadeInStep 3s ease-in-out infinite;
