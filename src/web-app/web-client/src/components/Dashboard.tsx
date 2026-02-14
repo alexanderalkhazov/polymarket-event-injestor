@@ -28,14 +28,28 @@ export const Dashboard = () => {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  };
+
+  const updateAutoScrollPreference = () => {
+    const container = chatMessagesRef.current;
+    if (!container) return;
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+
+    shouldAutoScrollRef.current = distanceFromBottom < 120;
   };
 
   useEffect(() => {
-    scrollToBottom();
+    if (shouldAutoScrollRef.current) {
+      scrollToBottom('auto');
+    }
   }, [messages]);
 
   // Load conversations on mount
@@ -79,6 +93,7 @@ export const Dashboard = () => {
   };
 
   const handleSendMessage = async (content: string) => {
+    shouldAutoScrollRef.current = true;
     const userMessageId = Date.now();
     const assistantMessageId = userMessageId + 1;
 
@@ -149,11 +164,13 @@ export const Dashboard = () => {
   };
 
   const handleNewChat = () => {
+    shouldAutoScrollRef.current = true;
     setMessages([]);
     setCurrentConversationId(null);
   };
 
   const handleSelectConversation = (conversationId: string) => {
+    shouldAutoScrollRef.current = true;
     loadConversation(conversationId);
   };
 
@@ -201,7 +218,7 @@ export const Dashboard = () => {
             <span>AI Powered</span>
           </div>
         </div>
-        <div className="chat-messages">
+        <div className="chat-messages" ref={chatMessagesRef} onScroll={updateAutoScrollPreference}>
           {displayMessages.map((message) => (
             <ChatMessage
               key={message.id}
