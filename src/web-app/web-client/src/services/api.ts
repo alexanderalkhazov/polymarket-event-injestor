@@ -106,6 +106,70 @@ export const chatAPI = {
     return response.data;
   },
 
+  sendMessageStream: async (
+    message: string,
+    conversationId: string | undefined,
+    handlers: {
+      onMeta?: (meta: { conversationId?: string }) => void;
+      onToken?: (token: string) => void;
+      onDone?: (done: { conversationId?: string; timestamp?: string }) => void;
+      onError?: (message: string) => void;
+    }
+  ): Promise<void> => {
+    const token = localStorage.getItem('token');
+
+    const response = await fetch(`${API_BASE_URL}/api/chat/message/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ message, conversationId }),
+    });
+
+    if (!response.ok || !response.body) {
+      const text = await response.text();
+      throw new Error(text || `Streaming request failed (${response.status})`);
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const reader = response.body.getReader();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      while (buffer.includes('\n\n')) {
+        const eventEnd = buffer.indexOf('\n\n');
+        const rawEvent = buffer.slice(0, eventEnd);
+        buffer = buffer.slice(eventEnd + 2);
+
+        const dataLine = rawEvent
+          .split('\n')
+          .find(line => line.startsWith('data: '));
+
+        if (!dataLine) continue;
+
+        const payload = JSON.parse(dataLine.replace('data: ', ''));
+
+        if (payload.type === 'meta' && handlers.onMeta) {
+          handlers.onMeta(payload);
+        } else if (payload.type === 'token' && handlers.onToken) {
+          handlers.onToken(payload.token || '');
+        } else if (payload.type === 'done' && handlers.onDone) {
+          handlers.onDone(payload);
+        } else if (payload.type === 'error') {
+          if (handlers.onError) handlers.onError(payload.message || 'Streaming error');
+          throw new Error(payload.message || 'Streaming error');
+        }
+      }
+    }
+  },
+
   // Get all conversations for current user
   getConversations: async (): Promise<{ 
     success: boolean; 

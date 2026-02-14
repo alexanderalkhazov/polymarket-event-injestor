@@ -1,11 +1,5 @@
-import Groq from 'groq-sdk';
 import config from '../config';
 import mongoose from '../db';
-
-// Initialize Groq client (free tier: 14,400 requests/day)
-const groq = new Groq({
-  apiKey: config.groq.apiKey,
-});
 
 interface PolymarketEvent {
   market_id: string;
@@ -69,12 +63,6 @@ class AIService {
   ): Promise<string> {
     try {
       console.log('🤖 Generating AI response for:', userMessage);
-      
-      // Check if API key is configured
-      if (!config.groq.apiKey || config.groq.apiKey === 'gsk_get_your_free_key_from_groq_console') {
-        console.log('⚠️  Groq API key not configured, using fallback response');
-        return await this.generateFallbackResponse(userMessage);
-      }
 
       // Get recent market events
       console.log('📊 Fetching Polymarket events from database...');
@@ -103,7 +91,7 @@ Guidelines:
 - Reference specific market data when making recommendations`;
 
       // Build messages array with conversation history
-      const messages: any[] = [
+      const messages: Array<{ role: string; content: string }> = [
         {
           role: 'system',
           content: systemPrompt,
@@ -120,39 +108,185 @@ Guidelines:
         content: userMessage,
       });
 
-      // Call Groq API (using llama-3.1-8b-instant)
-      console.log('🌐 Calling Groq API with LLaMA 3.1 8B...');
-      const chatCompletion = await groq.chat.completions.create({
-        messages,
-        model: 'llama-3.1-8b-instant', // Fast, free, and currently available
-        temperature: 0.7,
-        max_tokens: 1024,
+      console.log(`🌐 Calling Ollama at ${config.ollama.baseUrl} using model ${config.ollama.model}...`);
+      const ollamaResponse = await fetch(`${config.ollama.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.ollama.model,
+          messages,
+          stream: false,
+          options: {
+            temperature: 0.7,
+            num_predict: 1024,
+          },
+        }),
       });
 
-      const response = chatCompletion.choices[0]?.message?.content || 
+      if (!ollamaResponse.ok) {
+        const errorText = await ollamaResponse.text();
+        throw new Error(`Ollama request failed (${ollamaResponse.status}): ${errorText}`);
+      }
+
+      const chatCompletion: any = await ollamaResponse.json();
+
+      const response = chatCompletion?.message?.content || 
         'I apologize, but I was unable to generate a response. Please try again.';
       
-      console.log(`✅ Groq API response received (${response.length} chars)`);
+      console.log(`✅ Ollama response received (${response.length} chars)`);
       return response;
     } catch (error: any) {
-      console.error('❌ Groq API Error:', error.message || error);
+      console.error('❌ Ollama Error:', error.message || error);
       console.error('Error details:', error.response?.data || error.code);
       
       // Provide helpful error messages
-      if (error.message?.includes('API key') || error.status === 401 || error.message?.includes('Unauthorized')) {
-        console.error('🔑 Invalid or missing Groq API key');
-        return '🔑 **Invalid Groq API Key**\n\nThe API key in your `.env` file is either:\n- Missing\n- Invalid\n- Expired\n\n**Fix it:**\n1. Get a FREE key from https://console.groq.com\n2. Update `src/web-app/bff/.env`:\n   ```\n   GROQ_API_KEY=gsk_your_actual_key\n   ```\n3. Restart backend:\n   ```\n   npm run dev\n   ```\n\n**Free tier:** 14,400 requests/day (no credit card!)';
+      if (error.message?.includes('404') && error.message?.includes('model')) {
+        return `🤖 **Ollama Model Not Found**\n\nModel \`${config.ollama.model}\` is not available locally.\n\n**Fix it:**\n1. Pull model:\n   \`ollama pull ${config.ollama.model}\`\n2. Ensure Ollama is running\n3. Restart backend:\n   \`npm run dev\``;
       }
       
-      if (error.message?.includes('ENOTFOUND') || error.message?.includes('Network')) {
-        return '❌ **Network Error**\n\nCouldn\'t connect to Groq API. Check:\n- Internet connection\n- API key is valid\n- Groq service is up\n\nTry again in a moment.';
-      }
-      
-      if (error.message?.includes('rate')) {
-        return '⏱️ **Rate Limited**\n\nYou\'ve hit the API rate limit (14,400/day).\n\nWait a moment and try again. Limits reset every 24 hours.';
+      if (
+        error.message?.includes('ECONNREFUSED') ||
+        error.message?.includes('fetch failed') ||
+        error.message?.includes('ENOTFOUND') ||
+        error.message?.includes('Network')
+      ) {
+        return `❌ **Ollama Connection Error**\n\nCouldn't connect to Ollama at ${config.ollama.baseUrl}.\n\n**Check:**\n- Ollama app/service is running\n- URL is correct in .env (OLLAMA_BASE_URL)\n- Model exists locally (ollama list)`;
       }
       
       // Try fallback response on error
+      console.log('Falling back to local response generation...');
+      try {
+        return await this.generateFallbackResponse(userMessage);
+      } catch {
+        return '❌ I encountered an error processing your request. Please check the backend logs and try again.';
+      }
+    }
+  }
+
+  async streamTradingRecommendation(
+    userMessage: string,
+    conversationHistory: Array<{ role: string; content: string }> = [],
+    onToken?: (token: string) => void
+  ): Promise<string> {
+    try {
+      console.log('🤖 Streaming AI response for:', userMessage);
+
+      console.log('📊 Fetching Polymarket events from database...');
+      const events = await this.getRecentEvents(100);
+      console.log(`✅ Retrieved ${events.length} events from database`);
+
+      const eventsContext = this.buildEventsContext(events);
+
+      const systemPrompt = `You are a Polymarket trading AI assistant with expertise in prediction markets and trading strategies. 
+
+You help users make informed trading decisions based on real market data and analysis.
+
+Current Market Context:
+${eventsContext}
+
+Guidelines:
+- Analyze the user's question in the context of available market data
+- Provide clear, actionable trading recommendations
+- Explain your reasoning based on market trends, volume, and price movements
+- Consider risk factors and suggest risk management strategies
+- Be honest about uncertainty - prediction markets are probabilistic
+- Keep responses concise but informative (2-4 paragraphs)
+- Use bullet points for key recommendations
+- Reference specific market data when making recommendations`;
+
+      const messages: Array<{ role: string; content: string }> = [
+        {
+          role: 'system',
+          content: systemPrompt,
+        },
+      ];
+
+      const recentHistory = conversationHistory.slice(-5);
+      messages.push(...recentHistory);
+      messages.push({
+        role: 'user',
+        content: userMessage,
+      });
+
+      console.log(`🌐 Streaming from Ollama at ${config.ollama.baseUrl} using model ${config.ollama.model}...`);
+      const ollamaResponse = await fetch(`${config.ollama.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.ollama.model,
+          messages,
+          stream: true,
+          options: {
+            temperature: 0.7,
+            num_predict: 1024,
+          },
+        }),
+      });
+
+      if (!ollamaResponse.ok) {
+        const errorText = await ollamaResponse.text();
+        throw new Error(`Ollama request failed (${ollamaResponse.status}): ${errorText}`);
+      }
+
+      if (!ollamaResponse.body) {
+        throw new Error('Ollama response stream is empty');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+
+      for await (const chunk of ollamaResponse.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const data = JSON.parse(line);
+          const token = data?.message?.content || '';
+          if (token) {
+            fullText += token;
+            if (onToken) onToken(token);
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        const data = JSON.parse(buffer);
+        const token = data?.message?.content || '';
+        if (token) {
+          fullText += token;
+          if (onToken) onToken(token);
+        }
+      }
+
+      if (!fullText) {
+        return 'I apologize, but I was unable to generate a response. Please try again.';
+      }
+
+      console.log(`✅ Ollama streaming response complete (${fullText.length} chars)`);
+      return fullText;
+    } catch (error: any) {
+      console.error('❌ Ollama Streaming Error:', error.message || error);
+
+      if (error.message?.includes('404') && error.message?.includes('model')) {
+        return `🤖 **Ollama Model Not Found**\n\nModel \`${config.ollama.model}\` is not available locally.\n\n**Fix it:**\n1. Pull model:\n   \`ollama pull ${config.ollama.model}\`\n2. Ensure Ollama is running\n3. Restart backend:\n   \`npm run dev\``;
+      }
+
+      if (
+        error.message?.includes('ECONNREFUSED') ||
+        error.message?.includes('fetch failed') ||
+        error.message?.includes('ENOTFOUND') ||
+        error.message?.includes('Network')
+      ) {
+        return `❌ **Ollama Connection Error**\n\nCouldn't connect to Ollama at ${config.ollama.baseUrl}.\n\n**Check:**\n- Ollama app/service is running\n- URL is correct in .env (OLLAMA_BASE_URL)\n- Model exists locally (ollama list)`;
+      }
+
       console.log('Falling back to local response generation...');
       try {
         return await this.generateFallbackResponse(userMessage);
@@ -231,10 +365,10 @@ Guidelines:
     }
     
     if (lower.includes('buy') || lower.includes('sell') || lower.includes('trade')) {
-      return `**Trading Analysis**${dataSection}Based on your question: "${userMessage}"\n\nI can help you analyze trading opportunities, but I need more specific information:\n\n• **Which market** are you interested in? (e.g., political events, sports, crypto)\n• **What timeframe** are you considering?\n• **What's your risk tolerance**? (conservative, moderate, aggressive)\n\n**General Trading Tips for Prediction Markets:**\n\n1. **Do Your Research** - Always verify market conditions and recent events\n2. **Manage Risk** - Never invest more than you can afford to lose\n3. **Diversify** - Spread positions across multiple markets\n4. **Watch Volume** - Higher volume markets tend to be more accurate\n5. **Time Your Entry** - Consider waiting for significant price movements\n\n🤖 *Get full AI-powered analysis by adding your FREE Groq API key!*\n   → Visit https://console.groq.com (no credit card needed)\n   → Add to \`.env\`: \`GROQ_API_KEY=gsk_...\`\n   → Restart backend server`;
+      return `**Trading Analysis**${dataSection}Based on your question: "${userMessage}"\n\nI can help you analyze trading opportunities, but I need more specific information:\n\n• **Which market** are you interested in? (e.g., political events, sports, crypto)\n• **What timeframe** are you considering?\n• **What's your risk tolerance**? (conservative, moderate, aggressive)\n\n**General Trading Tips for Prediction Markets:**\n\n1. **Do Your Research** - Always verify market conditions and recent events\n2. **Manage Risk** - Never invest more than you can afford to lose\n3. **Diversify** - Spread positions across multiple markets\n4. **Watch Volume** - Higher volume markets tend to be more accurate\n5. **Time Your Entry** - Consider waiting for significant price movements\n\n🤖 *Get full AI-powered analysis by running Ollama locally!*\n   → Install Ollama: https://ollama.com\n   → Pull model: \`ollama pull ${config.ollama.model}\`\n   → Set \`.env\`: \`OLLAMA_BASE_URL=http://localhost:11434\`\n   → Restart backend server`;
     }
 
-    return `**Polymarket AI Assistant**${dataSection}I can help you with:\n\n• Market analysis and trading recommendations\n• Risk assessment and strategy guidance  \n• Historical price trends and volume analysis\n• Specific market questions\n\n**Note:** For full AI-powered analysis, configure your Groq API key:\n→ FREE at https://console.groq.com (14,400 requests/day)\n→ Add to \`.env\`: \`GROQ_API_KEY=gsk_...\`\n→ Restart backend\n\n💡 **Try asking:**\n- "Should I buy or sell [asset]?"\n- "What are the trending markets?"\n- "Analyze [specific market]"\n- "Give me a trading strategy"\n\nWhat would you like to know?`;
+    return `**Polymarket AI Assistant**${dataSection}I can help you with:\n\n• Market analysis and trading recommendations\n• Risk assessment and strategy guidance  \n• Historical price trends and volume analysis\n• Specific market questions\n\n**Note:** For full AI-powered analysis, run Ollama locally:\n→ Install: https://ollama.com\n→ Pull model: \`ollama pull ${config.ollama.model}\`\n→ Add to \`.env\`: \`OLLAMA_BASE_URL=http://localhost:11434\`\n→ Restart backend\n\n💡 **Try asking:**\n- "Should I buy or sell [asset]?"\n- "What are the trending markets?"\n- "Analyze [specific market]"\n- "Give me a trading strategy"\n\nWhat would you like to know?`;
   }
 
   // Generate conversation title from first message
