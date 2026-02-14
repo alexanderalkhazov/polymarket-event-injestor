@@ -122,8 +122,8 @@ class PolymarketClient:
         
         if outcomes_raw and prices_raw:
             try:
-                outcomes: List[str] = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
-                prices: List[str] = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+                outcomes: Optional[List[str]] = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
+                prices: Optional[List[str]] = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
             except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 logger.debug("Failed to parse outcomes/prices for %s: %s", market_id, exc)
                 outcomes = None

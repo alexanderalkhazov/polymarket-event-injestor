@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Dict
 
 from confluent_kafka import Producer
-from confluent_kafka.admin import AdminClient, NewTopic
+from confluent_kafka.admin import AdminClient
+from confluent_kafka.cimpl import NewTopic
 
 from .config import KafkaConfig
 from .event_builder import event_to_dict
@@ -32,7 +34,7 @@ class KafkaClient:
     def __init__(self, config: KafkaConfig) -> None:
         self._config = config
 
-        producer_conf: dict[str, object] = {
+        producer_conf: Dict[str, str | int | float | bool] = {
             "bootstrap.servers": config.bootstrap_servers,
             "client.id": config.client_id,
             "acks": "all",
@@ -69,7 +71,7 @@ class KafkaClient:
     def _ensure_topic_exists(self) -> None:
         """Create the Kafka topic if it doesn't exist."""
         try:
-            admin_conf = {
+            admin_conf: Dict[str, str | int | float | bool] = {
                 "bootstrap.servers": self._config.bootstrap_servers,
             }
             if self._config.security_protocol != "PLAINTEXT":
@@ -96,8 +98,6 @@ class KafkaClient:
                 except Exception as e:
                     # Topic may already exist, which is fine
                     logger.debug("Topic '%s' already exists or creation status: %s", topic, e)
-            
-            admin_client.close()
         except Exception as e:
             logger.warning("Failed to ensure topic exists: %s. Proceeding anyway (auto-create may handle it).", e)
 
@@ -149,4 +149,4 @@ class KafkaClient:
 
     def flush(self, timeout: float | None = None) -> None:
         """Flush pending messages."""
-        self._producer.flush(timeout)
+        self._producer.flush(timeout if timeout is not None else -1)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, Dict, List
 
 import asyncio
 
@@ -66,7 +66,7 @@ class SubscriptionManager:
         extra_fields can include optional configuration such as conviction thresholds.
         """
         now = datetime.now(timezone.utc)
-        set_on_insert = {"created_at": now}
+        set_on_insert: Dict[str, Any] = {"created_at": now}
         if extra_fields:
             set_on_insert.update(extra_fields)
 

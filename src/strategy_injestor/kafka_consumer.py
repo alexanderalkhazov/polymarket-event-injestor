@@ -26,7 +26,7 @@ class KafkaConsumer:
     def __init__(self, config: KafkaConfig) -> None:
         self._config = config
 
-        consumer_conf: dict[str, object] = {
+        consumer_conf: Dict[str, str | int | float | bool | None] = {
             "bootstrap.servers": config.bootstrap_servers,
             "group.id": config.group_id,
             "auto.offset.reset": "earliest",
@@ -70,7 +70,10 @@ class KafkaConsumer:
             return None
 
         try:
-            payload = json.loads(msg.value().decode("utf-8"))
+            value = msg.value()
+            if value is None:
+                return None
+            payload = json.loads(value.decode("utf-8"))
             logger.debug("Received message from partition %d offset %d", msg.partition(), msg.offset())
             return payload
         except json.JSONDecodeError as exc:
