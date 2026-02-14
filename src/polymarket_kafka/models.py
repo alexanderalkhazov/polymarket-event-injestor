@@ -28,7 +28,7 @@ class PolymarketEvent(BaseModel):
     yes_price: float = Field(..., ge=0.0, le=1.0, description="Current YES token price (0.0-1.0)")
     no_price: float = Field(..., ge=0.0, le=1.0, description="Current NO token price (0.0-1.0)")
     source: str = Field(default="polymarket-kafka", description="Data source identifier")
-    published_at: Optional[datetime] = Field(None, description="When event was published to Kafka")
+    published_at: Optional[datetime] = Field(default=None, description="When event was published to Kafka")
 
     # Conviction change fields
     conviction_direction: str = Field(

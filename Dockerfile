@@ -14,7 +14,8 @@ COPY src ./src
 COPY scripts ./scripts
 
 RUN pip install --upgrade pip && \
-    pip install .
+    pip install . && \
+    pip install debugpy
 
 ENV POLYMARKET_BASE_URL="https://gamma-api.polymarket.com" \
     KAFKA_BOOTSTRAP_SERVERS="kafka:9092" \

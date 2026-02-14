@@ -5,8 +5,7 @@ from datetime import timedelta
 from typing import Any, Dict
 
 from couchbase.auth import PasswordAuthenticator
-from couchbase.cluster import Cluster
-from couchbase.options import ClusterOptions
+from couchbase.cluster import Cluster, ClusterOptions
 
 logger = logging.getLogger(__name__)
 
