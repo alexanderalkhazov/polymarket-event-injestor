@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
+import { MainNav } from './MainNav';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { useAuth } from '../context/AuthContext';
@@ -202,17 +203,10 @@ export const Dashboard = () => {
 
   return (
     <div className="dashboard-container">
-      <Sidebar 
-        conversations={conversations}
-        currentConversationId={currentConversationId}
-        onNewChat={handleNewChat}
-        onSelectConversation={handleSelectConversation}
-        onDeleteConversation={handleDeleteConversation}
-        isLoading={isLoadingConversations}
-      />
+      <MainNav />
       <div className="chat-main">
         <div className="chat-header">
-          <h1>Polymarket AI Assistant</h1>
+          <h1>Chat Dashboard</h1>
           <div className="chat-status">
             <span className="status-indicator"></span>
             <span>AI Powered</span>
@@ -245,6 +239,15 @@ export const Dashboard = () => {
         </div>
         <ChatInput onSend={handleSendMessage} disabled={isLoading} />
       </div>
+      <Sidebar 
+        conversations={conversations}
+        currentConversationId={currentConversationId}
+        onNewChat={handleNewChat}
+        onSelectConversation={handleSelectConversation}
+        onDeleteConversation={handleDeleteConversation}
+        isLoading={isLoadingConversations}
+        side="right"
+      />
     </div>
   );
 };
