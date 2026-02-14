@@ -17,18 +17,4 @@ RUN pip install --upgrade pip && \
     pip install . && \
     pip install debugpy
 
-ENV POLYMARKET_BASE_URL="https://gamma-api.polymarket.com" \
-    KAFKA_BOOTSTRAP_SERVERS="kafka:9092" \
-    KAFKA_TOPIC="polymarket-events" \
-    KAFKA_SECURITY_PROTOCOL="PLAINTEXT" \
-    KAFKA_CLIENT_ID="polymarket-kafka-producer" \
-    MONGODB_URI="mongodb://mongo:27017" \
-    MONGODB_DATABASE="horizon" \
-    MONGODB_COLLECTION="polymarket_subscriptions" \
-    MONGODB_POLL_INTERVAL_SECONDS=60 \
-    POLYMARKET_RATE_LIMIT_DELAY_MS=200 \
-    POLYMARKET_REQUEST_TIMEOUT_SECONDS=30 \
-    POLL_INTERVAL_SECONDS=30 \
-    ENVIRONMENT="dev"
-
 CMD ["python", "-m", "polymarket_kafka"]

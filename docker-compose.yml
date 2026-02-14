@@ -1,9 +1,8 @@
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+    env_file:
+      - env/zookeeper.env
     ports:
       - "2181:2181"
 
@@ -13,17 +12,8 @@ services:
       - zookeeper
     ports:
       - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    env_file:
+      - env/kafka.env
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=localhost:29092"]
       interval: 5s
@@ -35,8 +25,8 @@ services:
     image: mongo:6
     ports:
       - "27017:27017"
-    environment:
-      MONGO_INITDB_DATABASE: horizon
+    env_file:
+      - env/mongo.env
     volumes:
       - mongo-data:/data/db
 
@@ -44,10 +34,8 @@ services:
     image: mongo-express:latest
     ports:
       - "8081:8081"
-    environment:
-      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017
-      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
-      ME_CONFIG_BASICAUTH: "false"
+    env_file:
+      - env/mongo-express.env
     depends_on:
       - mongo
     restart: on-failure
@@ -116,10 +104,8 @@ services:
     depends_on:
       mongo:
         condition: service_started
-    environment:
-      MONGODB_URI: mongodb://mongo:27017
-      MONGODB_DATABASE: horizon
-      MONGODB_COLLECTION: polymarket_subscriptions
+    env_file:
+      - env/seed-subscriptions.env
     entrypoint:
       - /bin/bash
       - -c
@@ -142,28 +128,8 @@ services:
         condition: service_started
       seed-subscriptions:
         condition: service_completed_successfully
-    environment:
-      # Kafka
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_TOPIC: polymarket-events
-      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
-      KAFKA_CLIENT_ID: polymarket-kafka-producer
-
-      # MongoDB
-      MONGODB_URI: mongodb://mongo:27017
-      MONGODB_DATABASE: horizon
-      MONGODB_COLLECTION: polymarket_subscriptions
-      MONGODB_POLL_INTERVAL_SECONDS: 60
-
-      # Polling / environment
-      POLYMARKET_BASE_URL: https://gamma-api.polymarket.com
-      POLYMARKET_REQUEST_TIMEOUT_SECONDS: 30
-      POLYMARKET_RATE_LIMIT_DELAY_MS: 200
-      POLL_INTERVAL_SECONDS: 30
-      ENVIRONMENT: dev
-      LOG_LEVEL: INFO
-      DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1472327199397777643/B3q3o6e_8nSWxUJ9r6MUMYYz71fr0tQ9GS8nH5c-cYyeqC6v2LtW-6RzleKTx9jzB024
-      DISCORD_LOG_LEVEL: DEBUG
+    env_file:
+      - env/polymarket-kafka.env
     entrypoint:
       - /bin/bash
       - -c
@@ -176,8 +142,6 @@ services:
         done
         echo "MongoDB is ready!"
         python -m polymarket_kafka
-        SERVICE_NAME: polymarket-kafka
-        DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1472327199397777643/B3q3o6e_8nSWxUJ9r6MUMYYz71fr0tQ9GS8nH5c-cYyeqC6v2LtW-6RzleKTx9jzB024
 
   strategy-injestor:
     build: .
@@ -186,26 +150,8 @@ services:
         condition: service_healthy
       couchbase-init:
         condition: service_completed_successfully
-    environment:
-      # Kafka
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_TOPIC: polymarket-events
-      KAFKA_GROUP_ID: strategy-injestor
-      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
-
-      # Couchbase
-      COUCHBASE_CONNECTION_STRING: couchbase://couchbase
-      COUCHBASE_USERNAME: Administrator
-      COUCHBASE_PASSWORD: password
-      COUCHBASE_BUCKET: polymarket
-      
-      # Polling
-      POLL_INTERVAL_MS: 1000
-      ENVIRONMENT: dev
-      LOG_LEVEL: INFO
-      DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1472327099988578435/JDl8JRN8bclwcKpRN7ecuSWBQooi--r3PdwSE1VaguBBI-NevsITx8_WM_tA-95yPUZW
-      DISCORD_LOG_LEVEL: DEBUG
-      SERVICE_NAME: strategy-injestor
+    env_file:
+      - env/strategy-injestor.env
     entrypoint:
       - /bin/bash
       - -c
