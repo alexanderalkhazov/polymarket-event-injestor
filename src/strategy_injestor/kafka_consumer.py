@@ -74,7 +74,12 @@ class KafkaConsumer:
             if value is None:
                 return None
             payload = json.loads(value.decode("utf-8"))
-            logger.debug("Received message from partition %d offset %d", msg.partition(), msg.offset())
+            logger.debug(
+                "Received message topic=%s partition=%d offset=%d",
+                msg.topic(),
+                msg.partition(),
+                msg.offset(),
+            )
             return payload
         except json.JSONDecodeError as exc:
             logger.error("Failed to decode JSON message: %s", exc)

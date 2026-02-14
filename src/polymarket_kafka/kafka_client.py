@@ -133,7 +133,8 @@ class KafkaClient:
         data = json.dumps(payload, default=str).encode("utf-8")
 
         logger.info(
-            "Publishing event for market_id=%s event_id=%s direction=%s magnitude=%.4f",
+            "Publishing event to topic=%s market_id=%s event_id=%s direction=%s magnitude=%.4f",
+            self.topic,
             payload.get("market_id"),
             payload.get("event_id"),
             payload.get("conviction_direction"),

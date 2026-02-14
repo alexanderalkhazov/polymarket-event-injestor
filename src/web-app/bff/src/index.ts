@@ -7,8 +7,12 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import exampleRoutes from './routes/example.routes';
 import authRoutes from './routes/auth.routes';
 import chatRoutes from './routes/chat.routes';
+import { initDiscordLogger } from './logger/discord';
 
 const app = express();
+
+// Optional Discord logging hook
+initDiscordLogger();
 
 /**
  * Database Connection
@@ -25,7 +29,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  console.info(`${req.method} ${req.path}`);
   next();
 });
 

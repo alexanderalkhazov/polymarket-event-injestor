@@ -161,6 +161,9 @@ services:
       POLYMARKET_RATE_LIMIT_DELAY_MS: 200
       POLL_INTERVAL_SECONDS: 30
       ENVIRONMENT: dev
+      LOG_LEVEL: INFO
+      DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1472327199397777643/B3q3o6e_8nSWxUJ9r6MUMYYz71fr0tQ9GS8nH5c-cYyeqC6v2LtW-6RzleKTx9jzB024
+      DISCORD_LOG_LEVEL: DEBUG
     entrypoint:
       - /bin/bash
       - -c
@@ -173,7 +176,8 @@ services:
         done
         echo "MongoDB is ready!"
         python -m polymarket_kafka
-    restart: on-failure
+        SERVICE_NAME: polymarket-kafka
+        DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1472327199397777643/B3q3o6e_8nSWxUJ9r6MUMYYz71fr0tQ9GS8nH5c-cYyeqC6v2LtW-6RzleKTx9jzB024
 
   strategy-injestor:
     build: .
@@ -198,6 +202,10 @@ services:
       # Polling
       POLL_INTERVAL_MS: 1000
       ENVIRONMENT: dev
+      LOG_LEVEL: INFO
+      DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1472327099988578435/JDl8JRN8bclwcKpRN7ecuSWBQooi--r3PdwSE1VaguBBI-NevsITx8_WM_tA-95yPUZW
+      DISCORD_LOG_LEVEL: DEBUG
+      SERVICE_NAME: strategy-injestor
     entrypoint:
       - /bin/bash
       - -c

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 
 from .config import load_config
+from .discord_logging import ServiceFilter, attach_discord_logging
 from .data_source import PolymarketClient
 from .kafka_client import KafkaClient
 from .runner import PolymarketKafkaRunner
@@ -12,10 +14,18 @@ from .subscription_manager import SubscriptionManager
 
 
 def configure_logging() -> None:
+    level_name = os.getenv("LOG_LEVEL", "INFO")
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    log_format = "%(asctime)s | %(levelname)s | %(service)s | %(name)s | %(message)s"
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        level=level,
+        format=log_format,
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+    service_name = os.getenv("SERVICE_NAME", "polymarket-kafka")
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(ServiceFilter(service_name))
+    attach_discord_logging(service_name=service_name, formatter=log_format)
 
 
 async def main_async() -> None:

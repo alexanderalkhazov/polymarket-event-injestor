@@ -31,9 +31,11 @@ export const PollyMarketEvents = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
 
-  const loadEvents = async (limit: number | 'All' = selectedCount) => {
+  const loadEvents = async (limit: number | 'All' = selectedCount, showLoading: boolean = true) => {
     try {
-      setIsLoading(true);
+      if (showLoading) {
+        setIsLoading(true);
+      }
       setError('');
       // Convert 'All' to 'all' for the API, or use the number
       const apiLimit = limit === 'All' ? 'all' : limit;
@@ -45,12 +47,24 @@ export const PollyMarketEvents = () => {
     } catch (err: any) {
       setError(err?.message || 'Failed to load events');
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     loadEvents(selectedCount);
+  }, [selectedCount]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      loadEvents(selectedCount, false);
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
   }, [selectedCount]);
 
   const filteredEvents = useMemo(() => {

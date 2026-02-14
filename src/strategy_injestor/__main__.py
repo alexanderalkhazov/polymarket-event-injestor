@@ -2,18 +2,28 @@
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 
 from .config import load_config
+from .discord_logging import ServiceFilter, attach_discord_logging
 from .couchbase_client import CouchbaseClient
 from .kafka_consumer import KafkaConsumer
 from .runner import StrategyInjestorRunner
 
+level_name = os.getenv("LOG_LEVEL", "INFO")
+level = getattr(logging, level_name.upper(), logging.INFO)
+log_format = "%(asctime)s | %(levelname)s | %(service)s | %(name)s | %(message)s"
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    level=level,
+    format=log_format,
+    datefmt="%Y-%m-%dT%H:%M:%S%z",
 )
+service_name = os.getenv("SERVICE_NAME", "strategy-injestor")
+for handler in logging.getLogger().handlers:
+    handler.addFilter(ServiceFilter(service_name))
+attach_discord_logging(service_name=service_name, formatter=log_format)
 logger = logging.getLogger(__name__)
 
 

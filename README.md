@@ -27,3 +27,13 @@ The service detects conviction changes by tracking the YES price per market:
   - This feeds into `PolymarketEvent`, which is then published to Kafka.
 
 This approach keeps the logic simple and explainable while allowing per-market tuning for more or less sensitivity via MongoDB-stored subscription settings.
+
+### Discord Logging
+
+You can send service logs to a Discord channel using a webhook.
+
+Set these environment variables:
+
+- DISCORD_WEBHOOK_URL: your Discord webhook URL
+- DISCORD_LOG_LEVEL: DEBUG, INFO, WARNING, ERROR (defaults to LOG_LEVEL)
+- LOG_LEVEL: base logger level
