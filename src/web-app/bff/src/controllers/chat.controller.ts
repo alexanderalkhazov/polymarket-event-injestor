@@ -191,6 +191,108 @@ class ChatController {
     }
   }
 
+  async streamMessage(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).userId;
+      const { conversationId, message } = req.body;
+
+      if (!message || typeof message !== 'string') {
+        res.status(400).json({
+          success: false,
+          message: 'Please provide a message',
+        });
+        return;
+      }
+
+      let conversation;
+
+      if (conversationId) {
+        conversation = await Conversation.findOne({
+          _id: new mongoose.Types.ObjectId(conversationId),
+          userId: new mongoose.Types.ObjectId(userId),
+        });
+
+        if (!conversation) {
+          res.status(404).json({
+            success: false,
+            message: 'Conversation not found',
+          });
+          return;
+        }
+      } else {
+        const title = aiService.generateConversationTitle(message);
+        conversation = await Conversation.create({
+          userId: new mongoose.Types.ObjectId(userId),
+          title,
+          messages: [],
+        });
+      }
+
+      conversation.messages.push({
+        role: 'user',
+        content: message,
+        timestamp: new Date(),
+      });
+
+      await conversation.save();
+
+      const conversationHistory = conversation.messages.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+      }));
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      res.write(`data: ${JSON.stringify({
+        type: 'meta',
+        conversationId: String(conversation._id),
+      })}\n\n`);
+
+      let aiResponse = '';
+      aiResponse = await aiService.streamTradingRecommendation(
+        message,
+        conversationHistory,
+        (token: string) => {
+          res.write(`data: ${JSON.stringify({ type: 'token', token })}\n\n`);
+        }
+      );
+
+      conversation.messages.push({
+        role: 'assistant',
+        content: aiResponse,
+        timestamp: new Date(),
+      });
+
+      await conversation.save();
+
+      res.write(`data: ${JSON.stringify({
+        type: 'done',
+        conversationId: String(conversation._id),
+        timestamp: new Date().toISOString(),
+      })}\n\n`);
+
+      res.end();
+    } catch (error: any) {
+      console.error('Stream message error:', error);
+
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          message: error.message || 'Failed to process streamed message',
+        });
+        return;
+      }
+
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        message: error.message || 'Failed to process streamed message',
+      })}\n\n`);
+      res.end();
+    }
+  }
+
   // Delete a conversation
   async deleteConversation(req: Request, res: Response): Promise<void> {
     try {

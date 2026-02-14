@@ -9,6 +9,7 @@ router.post('/conversations', authenticate, chatController.createConversation);
 router.get('/conversations', authenticate, chatController.getConversations);
 router.get('/conversations/:conversationId', authenticate, chatController.getConversation);
 router.post('/message', authenticate, chatController.sendMessage);
+router.post('/message/stream', authenticate, chatController.streamMessage);
 router.delete('/conversations/:conversationId', authenticate, chatController.deleteConversation);
 router.get('/events', authenticate, chatController.getMarketEvents);
 

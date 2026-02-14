@@ -79,55 +79,70 @@ export const Dashboard = () => {
   };
 
   const handleSendMessage = async (content: string) => {
+    const userMessageId = Date.now();
+    const assistantMessageId = userMessageId + 1;
+
     const newMessage: Message = {
-      id: messages.length + 1,
+      id: userMessageId,
       role: 'user',
       content,
       timestamp: new Date().toLocaleTimeString(),
     };
 
-    setMessages([...messages, newMessage]);
+    const assistantPlaceholder: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toLocaleTimeString(),
+    };
+
+    setMessages((prev) => [...prev, newMessage, assistantPlaceholder]);
     setIsLoading(true);
 
     try {
-      console.log('Sending message:', { content, conversationId: currentConversationId });
-      
-      const response = await chatAPI.sendMessage(content, currentConversationId || undefined);
-      
-      console.log('Received response:', response);
-      
-      if (response.success && response.data) {
-        const aiResponse: Message = {
-          id: messages.length + 2,
-          role: 'assistant',
-          content: response.data.message,
-          timestamp: new Date(response.data.timestamp).toLocaleTimeString(),
-        };
-        setMessages((prev) => [...prev, aiResponse]);
-        
-        // Update conversation ID if this was a new conversation
-        if (!currentConversationId && response.data.conversationId) {
-          setCurrentConversationId(response.data.conversationId);
-          console.log('New conversation created:', response.data.conversationId);
-        }
-        
-        // Reload conversations to update sidebar
-        await loadConversations();
-      } else {
-        throw new Error('Invalid response from server');
-      }
+      console.log('Sending streamed message:', { content, conversationId: currentConversationId });
+
+      await chatAPI.sendMessageStream(content, currentConversationId || undefined, {
+        onMeta: (meta) => {
+          if (!currentConversationId && meta.conversationId) {
+            setCurrentConversationId(meta.conversationId);
+          }
+        },
+        onToken: (token) => {
+          if (!token) return;
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: message.content + token }
+                : message
+            )
+          );
+        },
+        onDone: async (done) => {
+          if (!currentConversationId && done.conversationId) {
+            setCurrentConversationId(done.conversationId);
+          }
+          await loadConversations();
+        },
+        onError: (streamError) => {
+          throw new Error(streamError);
+        },
+      });
     } catch (error: any) {
       console.error('❌ Chat error:', error);
-      console.error('Error details:', error.response?.data);
+      console.error('Error details:', error.response?.data || error.message);
       
       const errorMessage = error.response?.data?.message || error.message || 'Failed to send message';
-      const errorResponse: Message = {
-        id: messages.length + 2,
-        role: 'assistant',
-        content: `❌ **Error:** ${errorMessage}\n\n**Troubleshooting:**\n1. ✅ Backend server running on port 5000\n2. ✅ You are logged in\n3. ⚠️  Check Groq API key in \`.env\` (free at https://console.groq.com)\n4. ⚠️  Check MongoDB has Polymarket events\n\n*Tip: Even without API key, you should get fallback responses!*`,
-        timestamp: new Date().toLocaleTimeString(),
-      };
-      setMessages((prev) => [...prev, errorResponse]);
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                content: `❌ **Error:** ${errorMessage}\n\n**Troubleshooting:**\n1. ✅ Backend server running on port 5000\n2. ✅ You are logged in\n3. ⚠️  Ensure Ollama is running and reachable\n4. ⚠️  Check OLLAMA_MODEL exists locally\n\n*Tip: The assistant streams response chunks while generating.*`,
+              }
+            : message
+        )
+      );
     } finally {
       setIsLoading(false);
     }
@@ -163,7 +178,7 @@ export const Dashboard = () => {
     {
       id: 1,
       role: 'assistant' as const,
-      content: `Hello ${user?.name?.split(' ')[0] || 'there'}! 👋\n\nI'm your **Polymarket AI Assistant** powered by real-time market data and AI analysis.\n\n**I can help you with:**\n\n• 📊 **Market Analysis** - AI-powered insights on prediction markets\n• 💹 **Trading Strategies** - Recommendations based on latest 100 market events\n• ⚠️ **Risk Assessment** - Understand market trends and volatility\n• 📈 **Real-time Data** - Analysis of current market conditions\n\n**Try asking:**\n- "Should I buy or sell gold futures?"\n- "What are the trending markets?"\n- "Analyze political prediction markets"\n- "Give me a trading strategy for crypto"\n\n**Setup Status:**\n${conversations.length > 0 ? '✅ Conversations loaded from database' : '⚠️  No previous conversations'}\n✅ Backend connected\n⚠️  Get free Groq API key for full AI features\n\n${conversations.length > 0 ? 'Select a conversation from the sidebar or start a new one!' : 'Start chatting below!'}`,
+      content: `Hello ${user?.name?.split(' ')[0] || 'there'}! 👋\n\nI'm your **Polymarket AI Assistant** powered by real-time market data and Ollama streaming.\n\n**I can help you with:**\n\n• 📊 **Market Analysis** - AI-powered insights on prediction markets\n• 💹 **Trading Strategies** - Recommendations based on latest 100 market events\n• ⚠️ **Risk Assessment** - Understand market trends and volatility\n• 📈 **Real-time Data** - Analysis of current market conditions\n\n**Try asking:**\n- "Should I buy or sell gold futures?"\n- "What are the trending markets?"\n- "Analyze political prediction markets"\n- "Give me a trading strategy for crypto"\n\n**Setup Status:**\n${conversations.length > 0 ? '✅ Conversations loaded from database' : '⚠️  No previous conversations'}\n✅ Backend connected\n✅ Streaming chat enabled\n\n${conversations.length > 0 ? 'Select a conversation from the sidebar or start a new one!' : 'Start chatting below!'}`,
       timestamp: 'Just now',
     },
   ];

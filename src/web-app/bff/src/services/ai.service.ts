@@ -165,6 +165,137 @@ Guidelines:
     }
   }
 
+  async streamTradingRecommendation(
+    userMessage: string,
+    conversationHistory: Array<{ role: string; content: string }> = [],
+    onToken?: (token: string) => void
+  ): Promise<string> {
+    try {
+      console.log('🤖 Streaming AI response for:', userMessage);
+
+      console.log('📊 Fetching Polymarket events from database...');
+      const events = await this.getRecentEvents(100);
+      console.log(`✅ Retrieved ${events.length} events from database`);
+
+      const eventsContext = this.buildEventsContext(events);
+
+      const systemPrompt = `You are a Polymarket trading AI assistant with expertise in prediction markets and trading strategies. 
+
+You help users make informed trading decisions based on real market data and analysis.
+
+Current Market Context:
+${eventsContext}
+
+Guidelines:
+- Analyze the user's question in the context of available market data
+- Provide clear, actionable trading recommendations
+- Explain your reasoning based on market trends, volume, and price movements
+- Consider risk factors and suggest risk management strategies
+- Be honest about uncertainty - prediction markets are probabilistic
+- Keep responses concise but informative (2-4 paragraphs)
+- Use bullet points for key recommendations
+- Reference specific market data when making recommendations`;
+
+      const messages: Array<{ role: string; content: string }> = [
+        {
+          role: 'system',
+          content: systemPrompt,
+        },
+      ];
+
+      const recentHistory = conversationHistory.slice(-5);
+      messages.push(...recentHistory);
+      messages.push({
+        role: 'user',
+        content: userMessage,
+      });
+
+      console.log(`🌐 Streaming from Ollama at ${config.ollama.baseUrl} using model ${config.ollama.model}...`);
+      const ollamaResponse = await fetch(`${config.ollama.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.ollama.model,
+          messages,
+          stream: true,
+          options: {
+            temperature: 0.7,
+            num_predict: 1024,
+          },
+        }),
+      });
+
+      if (!ollamaResponse.ok) {
+        const errorText = await ollamaResponse.text();
+        throw new Error(`Ollama request failed (${ollamaResponse.status}): ${errorText}`);
+      }
+
+      if (!ollamaResponse.body) {
+        throw new Error('Ollama response stream is empty');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+
+      for await (const chunk of ollamaResponse.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const data = JSON.parse(line);
+          const token = data?.message?.content || '';
+          if (token) {
+            fullText += token;
+            if (onToken) onToken(token);
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        const data = JSON.parse(buffer);
+        const token = data?.message?.content || '';
+        if (token) {
+          fullText += token;
+          if (onToken) onToken(token);
+        }
+      }
+
+      if (!fullText) {
+        return 'I apologize, but I was unable to generate a response. Please try again.';
+      }
+
+      console.log(`✅ Ollama streaming response complete (${fullText.length} chars)`);
+      return fullText;
+    } catch (error: any) {
+      console.error('❌ Ollama Streaming Error:', error.message || error);
+
+      if (error.message?.includes('404') && error.message?.includes('model')) {
+        return `🤖 **Ollama Model Not Found**\n\nModel \`${config.ollama.model}\` is not available locally.\n\n**Fix it:**\n1. Pull model:\n   \`ollama pull ${config.ollama.model}\`\n2. Ensure Ollama is running\n3. Restart backend:\n   \`npm run dev\``;
+      }
+
+      if (
+        error.message?.includes('ECONNREFUSED') ||
+        error.message?.includes('fetch failed') ||
+        error.message?.includes('ENOTFOUND') ||
+        error.message?.includes('Network')
+      ) {
+        return `❌ **Ollama Connection Error**\n\nCouldn't connect to Ollama at ${config.ollama.baseUrl}.\n\n**Check:**\n- Ollama app/service is running\n- URL is correct in .env (OLLAMA_BASE_URL)\n- Model exists locally (ollama list)`;
+      }
+
+      console.log('Falling back to local response generation...');
+      try {
+        return await this.generateFallbackResponse(userMessage);
+      } catch {
+        return '❌ I encountered an error processing your request. Please check the backend logs and try again.';
+      }
+    }
+  }
+
   // Build context string from events
   private buildEventsContext(events: PolymarketEvent[]): string {
     if (events.length === 0) {
