@@ -328,7 +328,9 @@ class ChatController {
   // Get recent market events (debugging endpoint)
   async getMarketEvents(req: Request, res: Response): Promise<void> {
     try {
-      const limit = parseInt(req.query.limit as string) || 100;
+      // If limit is 0 or 'all', fetch all events without limit
+      const limitParam = req.query.limit as string;
+      const limit = limitParam === 'all' ? 0 : parseInt(limitParam) || 100;
       const events = await aiService.getRecentEvents(limit);
 
       res.status(200).json({

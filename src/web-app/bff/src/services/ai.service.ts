@@ -31,13 +31,19 @@ class AIService {
     try {
       const bucketName = config.couchbase.bucket;
 
+      // If limit is 0 or negative, fetch all events (no limit)
+      const query = limit > 0
+        ? `SELECT d.*
+           FROM \`${bucketName}\` AS d
+           ORDER BY STR_TO_MILLIS(d.timestamp) DESC
+           LIMIT $limit`
+        : `SELECT d.*
+           FROM \`${bucketName}\` AS d
+           ORDER BY STR_TO_MILLIS(d.timestamp) DESC`;
+
       let rows = await queryCouchbase<CouchbasePolymarketEvent>(
-        `SELECT d.*
-         FROM \`${bucketName}\` AS d
-         WHERE d.type IN ["conviction_event", "market_latest"]
-         ORDER BY STR_TO_MILLIS(d.timestamp) DESC
-         LIMIT $limit`,
-        { limit }
+        query,
+        limit > 0 ? { limit } : {}
       );
 
       const events: PolymarketEvent[] = rows.map((row) => {

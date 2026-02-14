@@ -15,7 +15,7 @@ interface MarketEvent {
 }
 
 export const PollyMarketEvents = () => {
-  const countOptions = [25, 50, 100, 200];
+  const countOptions = [25, 50, 100, 200, 'All'];
   const timeOptions = [
     { value: 'all', label: 'All Time' },
     { value: '1h', label: 'Last 1h' },
@@ -23,7 +23,7 @@ export const PollyMarketEvents = () => {
     { value: '7d', label: 'Last 7d' },
   ];
   const [events, setEvents] = useState<MarketEvent[]>([]);
-  const [selectedCount, setSelectedCount] = useState<number>(50);
+  const [selectedCount, setSelectedCount] = useState<number | 'All'>('All');
   const [searchText, setSearchText] = useState('');
   const [minVolume, setMinVolume] = useState('');
   const [selectedIndication, setSelectedIndication] = useState<'all' | 'yes' | 'no' | 'neutral'>('all');
@@ -31,11 +31,13 @@ export const PollyMarketEvents = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
 
-  const loadEvents = async (limit: number = selectedCount) => {
+  const loadEvents = async (limit: number | 'All' = selectedCount) => {
     try {
       setIsLoading(true);
       setError('');
-      const response = await chatAPI.getMarketEvents(limit);
+      // Convert 'All' to 'all' for the API, or use the number
+      const apiLimit = limit === 'All' ? 'all' : limit;
+      const response = await chatAPI.getMarketEvents(apiLimit);
       if (!response.success || !response.data) {
         throw new Error('Failed to load events');
       }
@@ -102,9 +104,11 @@ export const PollyMarketEvents = () => {
   }, [events, minVolume, searchText, selectedIndication, selectedTime]);
 
   const hotEvents = useMemo(() => {
-    return [...filteredEvents]
-      .sort((a, b) => (b.volume || 0) - (a.volume || 0))
-      .slice(0, selectedCount);
+    const sorted = [...filteredEvents]
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    
+    // If 'All' is selected, return all filtered events, otherwise slice
+    return selectedCount === 'All' ? sorted : sorted.slice(0, selectedCount);
   }, [filteredEvents, selectedCount]);
 
   const resetFilters = () => {
@@ -128,17 +132,22 @@ export const PollyMarketEvents = () => {
         <div className="events-header">
           <div>
             <h1>Pollymarket Events</h1>
-            <div className="events-subtitle">Showing {hotEvents.length} of {filteredEvents.length} filtered events</div>
+            <div className="events-subtitle">
+              Showing {hotEvents.length} of {filteredEvents.length} filtered events ({events.length} total)
+            </div>
           </div>
           <div className="events-actions">
             <select
               className="events-select"
               value={selectedCount}
-              onChange={(e) => setSelectedCount(Number(e.target.value))}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedCount(val === 'All' ? 'All' : Number(val));
+              }}
             >
               {countOptions.map((option) => (
                 <option key={option} value={option}>
-                  Top {option}
+                  {option === 'All' ? 'All Events' : `Top ${option}`}
                 </option>
               ))}
             </select>

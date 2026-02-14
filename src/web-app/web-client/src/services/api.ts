@@ -218,7 +218,7 @@ export const chatAPI = {
   },
 
   // Get market events (debugging)
-  getMarketEvents: async (limit: number = 100): Promise<{ 
+  getMarketEvents: async (limit: number | 'all' = 100): Promise<{ 
     success: boolean; 
     data?: { events: any[]; count: number } 
   }> => {
