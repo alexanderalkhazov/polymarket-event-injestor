@@ -212,37 +212,6 @@ services:
         python -m strategy_injestor
     restart: on-failure
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    restart: unless-stopped
-
-  ollama-pull:
-    image: ollama/ollama:latest
-    depends_on:
-      - ollama
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        echo "Waiting for Ollama service..."
-        idx=1
-        while [ $$idx -le 30 ]; do
-          ollama list >/dev/null 2>&1 && break
-          sleep 2
-          idx=$$((idx + 1))
-        done
-        echo "Pulling model llama3.1:8b..."
-        ollama pull llama3.1:8b
-        echo "Ollama model pull complete"
-    restart: "no"
-
 volumes:
   mongo-data:
   couchbase-data:
-  ollama-data:

@@ -47,7 +47,7 @@ const config: AppConfig = {
   },
   ollama: {
     baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-    model: process.env.OLLAMA_MODEL || 'qwen2.5:1.5b',
+    model: process.env.OLLAMA_MODEL || 'tinyllama:1.1b',
   },
   api_timeout: parseInt(process.env.API_TIMEOUT || '30000', 10),
 };
