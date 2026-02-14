@@ -38,6 +38,21 @@
   color: #888;
 }
 
+.events-link-btn {
+  margin-right: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #3a3a3a;
+  background: #2a2a2a;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.events-link-btn:hover {
+  background: #333;
+}
+
 .status-indicator {
   width: 8px;
   height: 8px;

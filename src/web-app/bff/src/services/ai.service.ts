@@ -34,22 +34,11 @@ class AIService {
       let rows = await queryCouchbase<CouchbasePolymarketEvent>(
         `SELECT d.*
          FROM \`${bucketName}\` AS d
-         WHERE d.type = "conviction_event"
+         WHERE d.type IN ["conviction_event", "market_latest"]
          ORDER BY STR_TO_MILLIS(d.timestamp) DESC
          LIMIT $limit`,
         { limit }
       );
-
-      if (rows.length === 0) {
-        rows = await queryCouchbase<CouchbasePolymarketEvent>(
-          `SELECT d.*
-           FROM \`${bucketName}\` AS d
-           WHERE d.type = "market_latest"
-           ORDER BY STR_TO_MILLIS(d.timestamp) DESC
-           LIMIT $limit`,
-          { limit }
-        );
-      }
 
       const events: PolymarketEvent[] = rows.map((row) => {
         const marketId = row.market_id || 'unknown';

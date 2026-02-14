@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext'
 import { Login } from './components/Login'
 import { Register } from './components/Register'
 import { Dashboard } from './components/Dashboard'
+import { PollyMarketEvents } from './components/PollyMarketEvents'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import './App.css'
 
@@ -18,6 +19,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/events"
+            element={
+              <ProtectedRoute>
+                <PollyMarketEvents />
               </ProtectedRoute>
             }
           />

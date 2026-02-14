@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
@@ -22,6 +23,7 @@ interface Conversation {
 }
 
 export const Dashboard = () => {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -214,6 +216,9 @@ export const Dashboard = () => {
         <div className="chat-header">
           <h1>Polymarket AI Assistant</h1>
           <div className="chat-status">
+            <button className="events-link-btn" onClick={() => navigate('/events')}>
+              Polly Market Events
+            </button>
             <span className="status-indicator"></span>
             <span>AI Powered</span>
           </div>
