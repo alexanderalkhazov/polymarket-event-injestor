@@ -20,8 +20,9 @@ export interface AppConfig {
     secret: string;
     expiresIn: string;
   };
-  groq: {
-    apiKey: string;
+  ollama: {
+    baseUrl: string;
+    model: string;
   };
   api_timeout: number;
 }
@@ -44,8 +45,9 @@ const config: AppConfig = {
     secret: process.env.JWT_SECRET || 'default-secret-change-in-production',
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
-  groq: {
-    apiKey: process.env.GROQ_API_KEY || '',
+  ollama: {
+    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+    model: process.env.OLLAMA_MODEL || 'qwen2.5:1.5b',
   },
   api_timeout: parseInt(process.env.API_TIMEOUT || '30000', 10),
 };

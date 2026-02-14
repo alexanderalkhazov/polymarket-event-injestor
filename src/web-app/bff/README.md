@@ -50,6 +50,21 @@ npm run dev
 
 The server will start on the configured port (default: 5000).
 
+### Ollama (Docker Compose)
+
+To run Ollama locally via the project Docker stack:
+
+```bash
+docker compose up -d ollama ollama-pull
+```
+
+Then keep these values in `.env`:
+
+```bash
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.1:8b
+```
+
 ### Build
 
 Compile TypeScript to JavaScript:
