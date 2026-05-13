@@ -35,6 +35,8 @@ class AppConfig:
     environment: str = "dev"
     poll_interval_seconds: int = 900    # Poll analytics every 15 minutes
     signal_cooldown_hours: float = 4.0  # Per-ticker per-signal cooldown
+    max_concurrent_fetches: int = 6
+    fetch_timeout_seconds: int = 25
 
 
 def _load_dotenv() -> None:
@@ -79,4 +81,6 @@ def load_config() -> AppConfig:
         environment=_get_env("ENVIRONMENT", "dev"),
         poll_interval_seconds=int(_get_env("POLL_INTERVAL_SECONDS", "900")),
         signal_cooldown_hours=float(_get_env("SIGNAL_COOLDOWN_HOURS", "4")),
+        max_concurrent_fetches=int(_get_env("MAX_CONCURRENT_FETCHES", "6")),
+        fetch_timeout_seconds=int(_get_env("FETCH_TIMEOUT_SECONDS", "25")),
     )

@@ -34,6 +34,9 @@ class AppConfig:
     couchbase: CouchbaseConfig
     environment: str = "dev"
     poll_interval_ms: int = 1000  # Poll interval in milliseconds
+    log_full_events: bool = False
+    dedupe_cache_size: int = 10000
+    consumer_pipeline: str = "all"
     
 
 def _load_dotenv() -> None:
@@ -82,4 +85,7 @@ def load_config() -> AppConfig:
         couchbase=couchbase,
         environment=_get_env("ENVIRONMENT", "dev"),
         poll_interval_ms=int(_get_env("POLL_INTERVAL_MS", "1000")),
+        log_full_events=_get_env("LOG_FULL_EVENTS", "false").lower() in {"1", "true", "yes", "on"},
+        dedupe_cache_size=int(_get_env("DEDUPE_CACHE_SIZE", "10000")),
+        consumer_pipeline=_get_env("CONSUMER_PIPELINE", "all").strip().lower(),
     )

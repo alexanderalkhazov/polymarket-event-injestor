@@ -15,6 +15,7 @@ class FinnhubConfig:
     base_url: str = "https://finnhub.io/api/v1"
     request_timeout_seconds: int = 30
     rate_limit_delay_ms: int = 1100  # 60 calls/min → ~1s between calls
+    http_pool_maxsize: int = 64
 
 
 @dataclass
@@ -70,6 +71,7 @@ def load_config() -> AppConfig:
         base_url=_get_env("FINNHUB_BASE_URL", "https://finnhub.io/api/v1"),
         request_timeout_seconds=int(_get_env("FINNHUB_REQUEST_TIMEOUT_SECONDS", "30")),
         rate_limit_delay_ms=int(_get_env("FINNHUB_RATE_LIMIT_DELAY_MS", "1100")),
+        http_pool_maxsize=int(_get_env("FINNHUB_HTTP_POOL_MAXSIZE", "64")),
     )
 
     kafka = KafkaConfig(

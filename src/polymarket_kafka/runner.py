@@ -11,6 +11,7 @@ from .event_builder import build_polymarket_event
 from .kafka_client import KafkaClient
 from .models import PolymarketSubscription
 from .subscription_manager import SubscriptionManager
+from observability.metrics import cycle_timer, record_error, record_published_event
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class PolymarketKafkaRunner:
         try:
             change = detect_conviction_change(sub, snapshot, state)
         except Exception as exc:
+            record_error("polymarket-kafka", "conviction_detection")
             logger.error("Conviction detection failed for %s: %s", market_id, exc)
             return
 
@@ -88,7 +90,9 @@ class PolymarketKafkaRunner:
             # Event is published to 'polymarket-events' topic with partition key = market_id
             # Consumed downstream by strategy-host and other subscribers
             self._kafka_client.publish_event(event)
+            record_published_event("polymarket-kafka", "polymarket")
         except Exception as exc:
+            record_error("polymarket-kafka", "publish_event")
             logger.error("Failed to publish event for %s: %s", market_id, exc)
 
     async def run(self) -> None:
@@ -96,39 +100,42 @@ class PolymarketKafkaRunner:
         logger.info("Starting PolymarketKafkaRunner with poll interval %ss", self._config.poll_interval_seconds)
         try:
             while not self._stop_requested:
-                try:
-                    subscriptions = await self._subscription_manager.get_active_subscriptions_async()
-                    logger.debug("Fetched %d active subscriptions", len(subscriptions))
-                except Exception as exc:
-                    logger.error("Failed to fetch active subscriptions: %s", exc)
-                    subscriptions = []
-
-                active_subs = [sub for sub in subscriptions if sub.is_active()]
-                if not active_subs:
-                    logger.debug("No active subscriptions, waiting %ds until next poll", self._config.poll_interval_seconds)
-                else:
-                    logger.info("Processing %d active subscription(s)", len(active_subs))
-
+                with cycle_timer("polymarket-kafka"):
                     try:
-                        snapshots = await self._data_source.fetch_all_markets_async()
-                        logger.info("Fetched %d market snapshots from Polymarket API", len(snapshots))
+                        subscriptions = await self._subscription_manager.get_active_subscriptions_async()
+                        logger.debug("Fetched %d active subscriptions", len(subscriptions))
                     except Exception as exc:
-                        logger.error("Failed to fetch markets from Polymarket API: %s", exc)
-                        snapshots = {}
+                        record_error("polymarket-kafka", "fetch_subscriptions")
+                        logger.error("Failed to fetch active subscriptions: %s", exc)
+                        subscriptions = []
 
-                    matched = 0
-                    tasks = []
-                    for sub in active_subs:
-                        snapshot = snapshots.get(sub.market_id)
-                        if snapshot is None:
-                            continue
-                        matched += 1
-                        tasks.append(self._process_subscription(sub, snapshot))
+                    active_subs = [sub for sub in subscriptions if sub.is_active()]
+                    if not active_subs:
+                        logger.debug("No active subscriptions, waiting %ds until next poll", self._config.poll_interval_seconds)
+                    else:
+                        logger.info("Processing %d active subscription(s)", len(active_subs))
 
-                    logger.info("Matched %d/%d subscriptions to API snapshots", matched, len(active_subs))
+                        try:
+                            snapshots = await self._data_source.fetch_all_markets_async()
+                            logger.info("Fetched %d market snapshots from Polymarket API", len(snapshots))
+                        except Exception as exc:
+                            record_error("polymarket-kafka", "fetch_markets")
+                            logger.error("Failed to fetch markets from Polymarket API: %s", exc)
+                            snapshots = {}
 
-                    if tasks:
-                        await asyncio.gather(*tasks, return_exceptions=True)
+                        matched = 0
+                        tasks = []
+                        for sub in active_subs:
+                            snapshot = snapshots.get(sub.market_id)
+                            if snapshot is None:
+                                continue
+                            matched += 1
+                            tasks.append(self._process_subscription(sub, snapshot))
+
+                        logger.info("Matched %d/%d subscriptions to API snapshots", matched, len(active_subs))
+
+                        if tasks:
+                            await asyncio.gather(*tasks, return_exceptions=True)
 
                 # Respect global poll interval for the whole cycle.
                 await asyncio.sleep(self._config.poll_interval_seconds)

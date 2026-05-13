@@ -2,9 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './context/AuthContext'
 import { Login } from './components/Login'
 import { Register } from './components/Register'
-import { Dashboard } from './components/Dashboard'
 import { MainDashboard } from './components/MainDashboard.tsx'
-import { PollyMarketEvents } from './components/PollyMarketEvents'
 import { LandingPage } from './components/LandingPage.tsx'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import './App.css'
@@ -21,7 +19,7 @@ function App() {
             path="/dashboard"
             element={
               <ProtectedRoute>
-                <MainDashboard />
+                <MainDashboard initialTab="overview" />
               </ProtectedRoute>
             }
           />
@@ -29,7 +27,7 @@ function App() {
             path="/chat"
             element={
               <ProtectedRoute>
-                <Dashboard />
+                <MainDashboard initialTab="chat" />
               </ProtectedRoute>
             }
           />
@@ -37,7 +35,15 @@ function App() {
             path="/events"
             element={
               <ProtectedRoute>
-                <PollyMarketEvents />
+                <MainDashboard initialTab="events" />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/trading"
+            element={
+              <ProtectedRoute>
+                <MainDashboard initialTab="trading" />
               </ProtectedRoute>
             }
           />

@@ -1,0 +1,340 @@
+-> GET /v1/api/iserver/auth/status
+<- 401 GET /v1/api/iserver/auth/status
+-> GET /v1/api/iserver/auth/status
+<- 401 GET /v1/api/iserver/auth/status
+-> GET /sso/Login?forwardTo=22&RL=1&ip2loc=US
+<- 200 GET /sso/Login?forwardTo=22&RL=1&ip2loc=US
+-> GET /css/bootstrap-5.2.2/bootstrap.min.css
+-> GET /css/bootstrap-switch-3.3.2/bootstrap-switch.min.css
+-> GET /css/fontawesome-6.4.2/all.min.css
+-> GET /scripts/common/js/jquery-3.7.0/jquery.min.js
+-> GET /css/ibkr/theme-ibkr-portal.min.css
+-> GET /css/am/login.min.css
+<- 200 GET /css/bootstrap-5.2.2/bootstrap.min.css
+<- 200 GET /css/bootstrap-switch-3.3.2/bootstrap-switch.min.css
+-> GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js
+<- 200 GET /css/ibkr/theme-ibkr-portal.min.css
+<- 200 GET /css/fontawesome-6.4.2/all.min.css
+-> GET /sso/lib/xyz.bundle.min.js
+<- 200 GET /scripts/common/js/jquery-3.7.0/jquery.min.js
+<- 200 GET /css/am/login.min.css
+<- 200 GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js
+<- 200 GET /sso/lib/xyz.bundle.min.js
+-> GET /css/common/abstracts/variables-brand-logo.css
+-> GET /css/common/abstracts/variables-borders.css
+-> GET /css/common/abstracts/fonts.css
+-> GET /css/common/abstracts/variables-alerts.css
+-> GET /css/common/abstracts/variables-buttons.css
+-> GET /css/common/abstracts/variables-colors-other.css
+<- 200 GET /css/common/abstracts/variables-brand-logo.css
+-> GET /css/common/abstracts/variables-colors-theme.css
+<- 200 GET /css/common/abstracts/variables-alerts.css
+-> GET /css/common/abstracts/variables-direction.css
+<- 200 GET /css/common/abstracts/variables-borders.css
+-> GET /css/common/abstracts/variables-forms.css
+<- 200 GET /css/common/abstracts/fonts.css
+-> GET /css/common/abstracts/variables-language-ar.css
+<- 200 GET /css/common/abstracts/variables-buttons.css
+-> GET /css/common/abstracts/variables-language-hu.css
+<- 200 GET /css/common/abstracts/variables-colors-theme.css
+<- 200 GET /css/common/abstracts/variables-colors-other.css
+<- 200 GET /css/common/abstracts/variables-forms.css
+-> GET /css/common/abstracts/variables-language-ja.css
+<- 200 GET /css/common/abstracts/variables-language-ar.css
+-> GET /css/common/abstracts/variables-language-ko.css
+<- 200 GET /css/common/abstracts/variables-direction.css
+-> GET /css/common/abstracts/variables-language-ru.css
+-> GET /css/common/abstracts/variables-language-zh-hans.css
+-> GET /css/common/abstracts/variables-language-zh-hant.css
+<- 200 GET /css/common/abstracts/variables-language-ja.css
+<- 200 GET /css/common/abstracts/variables-language-ko.css
+<- 200 GET /css/common/abstracts/variables-language-ru.css
+<- 200 GET /css/common/abstracts/variables-language-hu.css
+<- 200 GET /css/common/abstracts/variables-language-zh-hans.css
+-> GET /css/common/abstracts/variables-typography.css
+-> GET /css/common/abstracts/variables-reg-am.css
+-> GET /css/common/abstracts/variables-tables.css
+-> GET /css/common/abstracts/variables-sizing.css
+-> GET /css/common/abstracts/variables-website.css
+<- 200 GET /css/common/abstracts/variables-reg-am.css
+<- 200 GET /css/common/abstracts/variables-typography.css
+<- 200 GET /css/common/abstracts/variables-tables.css
+<- 200 GET /css/common/abstracts/variables-language-zh-hant.css
+<- 200 GET /css/common/abstracts/variables-sizing.css
+<- 200 GET /css/common/abstracts/variables-website.css
+-> GET /sso/Login?forwardTo=22&RL=1&ip2loc=US
+<- 200 GET /sso/Login?forwardTo=22&RL=1&ip2loc=US
+-> GET /css/bootstrap-5.2.2/bootstrap.min.css
+-> GET /css/am/login.min.css
+-> GET /scripts/common/js/jquery-3.7.0/jquery.min.js
+-> GET /css/ibkr/theme-ibkr-portal.min.css
+-> GET /css/fontawesome-6.4.2/all.min.css
+-> GET /css/bootstrap-switch-3.3.2/bootstrap-switch.min.css
+<- 200 GET /scripts/common/js/jquery-3.7.0/jquery.min.js
+-> GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js
+<- 200 GET /css/bootstrap-5.2.2/bootstrap.min.css
+<- 200 GET /css/fontawesome-6.4.2/all.min.css
+<- 200 GET /css/ibkr/theme-ibkr-portal.min.css
+<- 200 GET /css/am/login.min.css
+<- 200 GET /css/bootstrap-switch-3.3.2/bootstrap-switch.min.css
+-> GET /sso/lib/xyz.bundle.min.js
+-> GET /css/common/abstracts/fonts.css
+-> GET /css/common/abstracts/variables-alerts.css
+-> GET /css/common/abstracts/variables-borders.css
+<- 200 GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js
+<- 200 GET /sso/lib/xyz.bundle.min.js
+-> GET /css/common/abstracts/variables-brand-logo.css
+-> GET /css/common/abstracts/variables-buttons.css
+-> GET /css/common/abstracts/variables-colors-other.css
+<- 200 GET /css/common/abstracts/variables-alerts.css
+<- 200 GET /css/common/abstracts/variables-brand-logo.css
+<- 200 GET /css/common/abstracts/variables-borders.css
+<- 200 GET /css/common/abstracts/variables-buttons.css
+-> GET /css/common/abstracts/variables-colors-theme.css
+-> GET /css/common/abstracts/variables-direction.css
+-> GET /css/common/abstracts/variables-forms.css
+-> GET /css/common/abstracts/variables-language-ar.css
+<- 200 GET /css/common/abstracts/fonts.css
+-> GET /css/common/abstracts/variables-language-hu.css
+<- 200 GET /css/common/abstracts/variables-direction.css
+<- 200 GET /css/common/abstracts/variables-colors-other.css
+<- 200 GET /css/common/abstracts/variables-forms.css
+<- 200 GET /css/common/abstracts/variables-colors-theme.css
+-> GET /css/common/abstracts/variables-language-ja.css
+-> GET /css/common/abstracts/variables-language-ko.css
+-> GET /css/common/abstracts/variables-language-zh-hans.css
+-> GET /css/common/abstracts/variables-language-ru.css
+<- 200 GET /css/common/abstracts/variables-language-ar.css
+-> GET /css/common/abstracts/variables-language-zh-hant.css
+<- 200 GET /css/common/abstracts/variables-language-hu.css
+<- 200 GET /css/common/abstracts/variables-language-ja.css
+<- 200 GET /css/common/abstracts/variables-language-zh-hans.css
+<- 200 GET /css/common/abstracts/variables-language-ko.css
+<- 200 GET /css/common/abstracts/variables-language-ru.css
+-> GET /css/common/abstracts/variables-sizing.css
+-> GET /css/common/abstracts/variables-reg-am.css
+-> GET /css/common/abstracts/variables-tables.css
+-> GET /css/common/abstracts/variables-typography.css
+-> GET /css/common/abstracts/variables-website.css
+<- 200 GET /css/common/abstracts/variables-language-zh-hant.css
+<- 200 GET /css/common/abstracts/variables-reg-am.css
+<- 200 GET /css/common/abstracts/variables-typography.css
+<- 200 GET /css/common/abstracts/variables-sizing.css
+-> GET /css/common/base/direction.css
+-> GET /css/common/base/colors-background.css
+-> GET /css/common/base/borders.css
+-> GET /css/common/base/elements.css
+<- 200 GET /css/common/abstracts/variables-tables.css
+-> GET /css/common/base/colors-border.css
+<- 200 GET /css/common/base/borders.css
+<- 200 GET /css/common/base/direction.css
+<- 200 GET /css/common/base/elements.css
+<- 200 GET /css/common/base/colors-background.css
+-> GET /css/common/base/colors-fill.css
+-> GET /css/common/base/colors-text.css
+-> GET /css/common/base/cursors.css
+-> GET /css/common/base/data-theme.css
+<- 200 GET /css/common/abstracts/variables-website.css
+-> GET /css/common/base/image.css
+<- 200 GET /css/common/base/data-theme.css
+<- 200 GET /css/common/base/colors-border.css
+<- 200 GET /css/common/base/colors-fill.css
+<- 200 GET /css/common/base/colors-text.css
+-> GET /css/common/base/language-utilities.css
+<- 200 GET /css/common/base/cursors.css
+-> GET /css/common/base/links.css
+-> GET /css/common/base/lists.css
+-> GET /css/common/base/sizing.css
+-> GET /css/common/base/spacing.css
+<- 200 GET /css/common/base/image.css
+<- 200 GET /css/common/base/language-utilities.css
+-> GET /css/common/base/typography.css
+-> GET /css/common/base/utilities.css
+<- 200 GET /css/common/base/lists.css
+<- 200 GET /css/common/base/links.css
+<- 200 GET /css/common/base/sizing.css
+-> GET /css/common/base/webkit-utilities.css
+-> GET /css/common/overrides/bs-badge.css
+-> GET /css/common/overrides/bs-btn-close.css
+<- 200 GET /css/common/base/spacing.css
+<- 200 GET /css/common/base/webkit-utilities.css
+<- 200 GET /css/common/base/typography.css
+<- 200 GET /css/common/base/utilities.css
+-> GET /css/common/overrides/bs-button.css
+<- 200 GET /css/common/overrides/bs-badge.css
+-> GET /css/common/overrides/bs-button-danger.css
+-> GET /css/common/overrides/bs-button-black.css
+-> GET /css/common/overrides/bs-button-default.css
+-> GET /css/common/overrides/bs-button-info.css
+<- 200 GET /css/common/overrides/bs-button-danger.css
+<- 200 GET /css/common/overrides/bs-button.css
+<- 200 GET /css/common/overrides/bs-btn-close.css
+<- 200 GET /css/common/overrides/bs-button-black.css
+<- 200 GET /css/common/overrides/bs-button-default.css
+-> GET /css/common/overrides/bs-button-success.css
+-> GET /css/common/overrides/bs-button-primary.css
+-> GET /css/common/overrides/bs-button-secondary.css
+-> GET /css/common/overrides/bs-button-warning.css
+-> GET /css/common/overrides/bs-button-tertiary.css
+<- 200 GET /css/common/overrides/bs-button-info.css
+<- 200 GET /css/common/overrides/bs-button-success.css
+<- 200 GET /css/common/overrides/bs-button-secondary.css
+<- 200 GET /css/common/overrides/bs-button-warning.css
+-> GET /css/common/overrides/bs-collapse-link.css
+-> GET /css/common/overrides/bs-checkbox.css
+-> GET /css/common/overrides/bs-dropdown.css
+-> GET /css/common/overrides/bs-dropdown-menu.css
+<- 200 GET /css/common/overrides/bs-button-primary.css
+-> GET /css/common/overrides/bs-form.css
+<- 200 GET /css/common/overrides/bs-button-tertiary.css
+<- 200 GET /css/common/overrides/bs-checkbox.css
+<- 200 GET /css/common/overrides/bs-collapse-link.css
+<- 200 GET /css/common/overrides/bs-dropdown-menu.css
+-> GET /css/common/overrides/bs-input.css
+-> GET /css/common/overrides/bs-input-group.css
+<- 200 GET /css/common/overrides/bs-dropdown.css
+-> GET /css/common/overrides/bs-label.css
+-> GET /css/common/overrides/bs-modal.css
+-> GET /css/common/overrides/bs-nav-tabs.css
+<- 200 GET /css/common/overrides/bs-form.css
+<- 200 GET /css/common/overrides/bs-input-group.css
+<- 200 GET /css/common/overrides/bs-label.css
+<- 200 GET /css/common/overrides/bs-input.css
+<- 200 GET /css/common/overrides/bs-modal.css
+-> GET /css/common/overrides/bs-select.css
+-> GET /css/common/overrides/bs-popover.css
+-> GET /css/common/overrides/bs-radio.css
+-> GET /css/common/overrides/bs-switch.css
+-> GET /css/common/overrides/bs-textarea.css
+<- 200 GET /css/common/overrides/bs-popover.css
+<- 200 GET /css/common/overrides/bs-nav-tabs.css
+<- 200 GET /css/common/overrides/bs-radio.css
+<- 200 GET /css/common/overrides/bs-select.css
+<- 200 GET /css/common/overrides/bs-switch.css
+-> GET /css/common/overrides/bs-tooltip.css
+-> GET /css/common/overrides/js-animate.css
+-> GET /css/common/overrides/js-select2-4-0-13.css
+-> GET /css/common/overrides/js-switchery.css
+-> GET /css/common/components/alert.css
+<- 200 GET /css/common/overrides/js-select2-4-0-13.css
+<- 200 GET /css/common/overrides/bs-tooltip.css
+<- 200 GET /css/common/overrides/js-animate.css
+<- 200 GET /css/common/overrides/js-switchery.css
+-> GET /css/common/components/alert-danger.css
+-> GET /css/common/components/alert-gray.css
+-> GET /css/common/components/alert-info.css
+-> GET /css/common/components/alert-primary.css
+<- 200 GET /css/common/overrides/bs-textarea.css
+-> GET /css/common/components/alert-secondary.css
+<- 200 GET /css/common/components/alert-danger.css
+<- 200 GET /css/common/components/alert-gray.css
+-> GET /css/common/components/alert-success.css
+-> GET /css/common/components/alert-warning.css
+<- 200 GET /css/common/components/alert-info.css
+<- 200 GET /css/common/components/alert.css
+-> GET /css/common/components/alert-no-results.css
+-> GET /css/common/components/banner-cookies.css
+<- 200 GET /css/common/components/alert-primary.css
+-> GET /css/common/components/brand-logo.css
+<- 200 GET /css/common/components/alert-no-results.css
+<- 200 GET /css/common/components/alert-secondary.css
+<- 200 GET /css/common/components/banner-cookies.css
+<- 200 GET /css/common/components/alert-success.css
+<- 200 GET /css/common/components/alert-warning.css
+-> GET /css/common/components/checkbox.css
+-> GET /css/common/components/btn-icon.css
+-> GET /css/common/components/btn-switch.css
+-> GET /css/common/components/logo-white-branding.css
+-> GET /css/common/components/modal-cookies.css
+<- 200 GET /css/common/components/checkbox.css
+<- 200 GET /css/common/components/btn-switch.css
+<- 200 GET /css/common/components/brand-logo.css
+<- 200 GET /css/common/components/btn-icon.css
+<- 200 GET /css/common/components/logo-white-branding.css
+-> GET /css/common/components/radio.css
+-> GET /css/am/base/am-animations.css
+-> GET /css/common/components/search.css
+-> GET /css/am/components/load-bar.css
+-> GET /css/am/base/elements.css
+<- 200 GET /css/common/components/modal-cookies.css
+<- 200 GET /css/am/base/am-animations.css
+<- 200 GET /css/common/components/search.css
+<- 200 GET /css/common/components/radio.css
+<- 200 GET /css/am/components/load-bar.css
+-> GET /css/am/components/refresh-block.css
+-> GET /css/am/components/panel-btns.css
+-> GET /css/am/pages/login.css
+<- 200 GET /css/am/base/elements.css
+<- 200 GET /css/am/pages/login.css
+<- 200 GET /css/am/components/refresh-block.css
+<- 200 GET /css/am/components/panel-btns.css
+-> GET /images/common/logos/ibkr/interactive-brokers.svg
+-> GET /fonts/proxima-nova/Proxima-Nova-Regular.woff2
+-> GET /fonts/proxima-nova/Proxima-Nova-Semibold.woff2
+-> GET /fonts/fontawesome-6.4.2/webfonts/fa-brands-400.woff2
+-> GET /fonts/fontawesome-6.4.2/webfonts/fa-solid-900.woff2
+-> POST /sso/report
+<- 200 GET /images/common/logos/ibkr/interactive-brokers.svg
+-> POST /portal.proxy/v1/gstat/bulletins
+<- 200 GET /fonts/fontawesome-6.4.2/webfonts/fa-solid-900.woff2
+<- 200 GET /fonts/fontawesome-6.4.2/webfonts/fa-brands-400.woff2
+<- 200 GET /fonts/proxima-nova/Proxima-Nova-Regular.woff2
+<- 200 GET /fonts/proxima-nova/Proxima-Nova-Semibold.woff2
+-> GET /images/web/favicons/home-screen-icon-128x128.png
+<- 200 GET /images/web/favicons/home-screen-icon-128x128.png
+<- 204 POST /portal.proxy/v1/gstat/bulletins
+<- 200 POST /sso/report
+-> GET /sso/Login?forwardTo=22&RL=1&ip2loc=US
+<- 200 GET /sso/Login?forwardTo=22&RL=1&ip2loc=US
+-> GET /css/ibkr/theme-ibkr-portal.min.css
+-> GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js
+-> GET /sso/lib/xyz.bundle.min.js
+-> GET /css/am/login.min.css
+-> GET /scripts/common/js/jquery-3.7.0/jquery.min.js
+<- 304 GET /scripts/common/js/jquery-3.7.0/jquery.min.js
+<- 304 GET /css/ibkr/theme-ibkr-portal.min.css
+<- 304 GET /sso/lib/xyz.bundle.min.js
+<- 200 GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js
+<- 304 GET /css/am/login.min.css
+-> GET /css/common/abstracts/fonts.css
+-> GET /css/common/abstracts/variables-language-zh-hant.css
+-> GET /css/common/abstracts/variables-sizing.css
+-> GET /css/common/abstracts/variables-alerts.css
+-> GET /css/common/abstracts/variables-reg-am.css
+-> GET /css/common/abstracts/variables-tables.css
+<- 200 GET /css/common/abstracts/variables-sizing.css
+<- 304 GET /css/common/abstracts/variables-alerts.css
+<- 304 GET /css/common/abstracts/fonts.css
+<- 200 GET /css/common/abstracts/variables-language-zh-hant.css
+<- 200 GET /css/common/abstracts/variables-reg-am.css
+-> GET /css/common/abstracts/variables-borders.css
+-> GET /css/common/abstracts/variables-typography.css
+-> GET /css/common/abstracts/variables-website.css
+-> GET /css/common/base/direction.css
+-> GET /css/common/base/elements.css
+<- 304 GET /css/common/abstracts/variables-borders.css
+<- 200 GET /css/common/abstracts/variables-tables.css
+-> GET /css/common/abstracts/variables-brand-logo.css
+-> GET /css/common/base/borders.css
+<- 200 GET /css/common/abstracts/variables-typography.css
+<- 200 GET /css/common/base/direction.css
+-> GET /css/common/base/colors-background.css
+-> GET /css/common/base/colors-border.css
+<- 200 GET /css/common/abstracts/variables-website.css
+-> GET /css/common/base/colors-fill.css
+<- 304 GET /css/common/abstracts/variables-brand-logo.css
+<- 200 GET /css/common/base/elements.css
+<- 200 GET /css/common/base/borders.css
+<- 200 GET /css/common/base/colors-background.css
+<- 200 GET /css/common/base/colors-border.css
+-> GET /css/common/base/data-theme.css
+-> GET /css/common/base/cursors.css
+-> GET /css/common/base/colors-text.css
+-> GET /css/common/base/image.css
+-> GET /css/common/base/language-utilities.css
+<- 200 GET /css/common/base/colors-fill.css
+<- 200 GET /css/common/base/data-theme.css
+<- 200 GET /css/common/base/cursors.css
+<- 200 GET /css/common/base/colors-text.css
+<- 200 GET /css/common/base/image.css
+<- 200 GET /css/common/base/language-utilities.css

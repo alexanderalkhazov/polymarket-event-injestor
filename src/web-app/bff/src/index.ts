@@ -7,12 +7,13 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import exampleRoutes from './routes/example.routes';
 import authRoutes from './routes/auth.routes';
 import chatRoutes from './routes/chat.routes';
-import { initDiscordLogger } from './logger/discord';
+import tradingRoutes from './routes/trading.routes';
+import { requestLogger, setupLogging } from './logger/pro';
+import { httpRequestDurationSeconds, httpRequestsTotal, normalizeRoutePath, registry } from './observability/metrics';
 
 const app = express();
 
-// Optional Discord logging hook
-initDiscordLogger();
+setupLogging();
 
 /**
  * Database Connection
@@ -26,10 +27,15 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Request logging middleware
+app.use(requestLogger);
 app.use((req, res, next) => {
-  console.info(`${req.method} ${req.path}`);
+  const route = normalizeRoutePath(req.path || '/');
+  const stopTimer = httpRequestDurationSeconds.startTimer({ method: req.method, route });
+  res.on('finish', () => {
+    const statusCode = String(res.statusCode);
+    httpRequestsTotal.inc({ method: req.method, route, status_code: statusCode });
+    stopTimer({ status_code: statusCode });
+  });
   next();
 });
 
@@ -38,6 +44,7 @@ app.use((req, res, next) => {
  */
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/trading', tradingRoutes);
 app.use('/api', exampleRoutes);
 
 // Root endpoint
@@ -49,6 +56,11 @@ app.get('/', (req, res) => {
   });
 });
 
+app.get('/metrics', async (_req, res) => {
+  res.setHeader('Content-Type', registry.contentType);
+  res.send(await registry.metrics());
+});
+
 /**
  * Error Handling
  */
@@ -58,7 +70,7 @@ app.use(errorHandler);
 /**
  * Start Server
  */
-const PORT = 5001;
+const PORT = config.port;
 const server = app.listen(PORT, () => {
   console.log(`✓ Server running on port ${PORT}`);
   console.log(`✓ Environment: ${config.node_env}`);

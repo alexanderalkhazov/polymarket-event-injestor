@@ -227,4 +227,65 @@ export const chatAPI = {
   },
 };
 
+export interface TradingOrderRequest {
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  orderType: 'MKT' | 'LMT' | 'STP' | 'STP LMT';
+  limitPrice?: number;
+  stopPrice?: number;
+  tif?: 'DAY' | 'GTC';
+  outsideRth?: boolean;
+  attachStopLoss?: {
+    stopPrice: number;
+  };
+}
+
+export const tradingAPI = {
+  connectAccount: async (ibkrAccountId: string): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.post('/api/trading/connect', { ibkrAccountId });
+    return response.data;
+  },
+
+  getAccount: async (): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.get('/api/trading/account');
+    return response.data;
+  },
+
+  placeOrder: async (payload: TradingOrderRequest): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.post('/api/trading/orders', payload);
+    return response.data;
+  },
+
+  cancelOrder: async (orderId: string): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.post(`/api/trading/orders/${orderId}/cancel`);
+    return response.data;
+  },
+
+  listOrders: async (): Promise<{ success: boolean; data?: any[]; message?: string }> => {
+    const response = await api.get('/api/trading/orders');
+    return response.data;
+  },
+
+  listPositions: async (): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.get('/api/trading/positions');
+    return response.data;
+  },
+
+  getSnapshot: async (): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.get('/api/trading/snapshot');
+    return response.data;
+  },
+
+  getBrokerHealth: async (): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.get('/api/trading/health');
+    return response.data;
+  },
+
+  getDashboard: async (): Promise<{ success: boolean; data?: any; message?: string }> => {
+    const response = await api.get('/api/trading/dashboard');
+    return response.data;
+  },
+};
+
 export default api;

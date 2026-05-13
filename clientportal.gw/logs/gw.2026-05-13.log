@@ -1,0 +1,261 @@
+20:18:06.457 INFO  main GatewayStart         : config ../root/conf.yaml !!ibgroup.web.core.clientportal.gw.Config
+authDelay: 3000
+ccp: false
+cors: {origin.allowed: '*', allowCredentials: false}
+ip2loc: US
+ips:
+  allow: [192.*, 131.216.*, 127.0.0.1]
+  deny: [212.90.324.10]
+listenPort: 5000
+listenSsl: true
+portalBaseURL: ''
+proxyRemoteHost: https://api.ibkr.com
+proxyRemoteSsl: true
+sslCert: vertx.jks
+sslPwd: mywebapi
+ssoPing: 5
+svcEnvironment: v1
+tst: false
+twsBaseURL: /tws.proxy
+webApps:
+- {cache: true, index: index.html, listing: false, name: demo, proxy: ''}
+
+20:18:06.568 INFO  vert.x-eventloop-thread-0 GatewayHttpProxy     :  -> mount demo on /demo
+20:18:06.578 INFO  vert.x-eventloop-thread-0 GatewayVerticle      : version: a27ed42161ad96c53e715ca5c5e3e3fa4cff5262 Mon, 24 Apr 2023 15:41:53 -0400
+20:18:06.578 INFO  vert.x-eventloop-thread-0 GatewayVerticle      : Java Version: 17.0.15
+20:18:06.652 ERROR vert.x-eventloop-thread-0 DeploymentManager    : Address already in use
+io.vertx.core.impl.NoStackTraceThrowable: Address already in use
+20:19:48.093 INFO  main GatewayStart         : config ../root/conf.yaml !!ibgroup.web.core.clientportal.gw.Config
+authDelay: 3000
+ccp: false
+cors: {origin.allowed: '*', allowCredentials: false}
+ip2loc: US
+ips:
+  allow: [192.*, 131.216.*, 127.0.0.1]
+  deny: [212.90.324.10]
+listenPort: 5002
+listenSsl: false
+portalBaseURL: ''
+proxyRemoteHost: https://api.ibkr.com
+proxyRemoteSsl: true
+sslCert: vertx.jks
+sslPwd: mywebapi
+ssoPing: 5
+svcEnvironment: v1
+tst: false
+twsBaseURL: /tws.proxy
+webApps:
+- {cache: true, index: index.html, listing: false, name: demo, proxy: ''}
+
+20:19:48.202 INFO  vert.x-eventloop-thread-0 GatewayHttpProxy     :  -> mount demo on /demo
+20:19:48.213 INFO  vert.x-eventloop-thread-0 GatewayVerticle      : version: a27ed42161ad96c53e715ca5c5e3e3fa4cff5262 Mon, 24 Apr 2023 15:41:53 -0400
+20:19:48.213 INFO  vert.x-eventloop-thread-0 GatewayVerticle      : Java Version: 17.0.15
+20:20:01.599 INFO  main GatewayStart         : config ../root/conf.yaml !!ibgroup.web.core.clientportal.gw.Config
+authDelay: 3000
+ccp: false
+cors: {origin.allowed: '*', allowCredentials: false}
+ip2loc: US
+ips:
+  allow: [192.*, 131.216.*, 127.0.0.1]
+  deny: [212.90.324.10]
+listenPort: 5002
+listenSsl: false
+portalBaseURL: ''
+proxyRemoteHost: https://api.ibkr.com
+proxyRemoteSsl: true
+sslCert: vertx.jks
+sslPwd: mywebapi
+ssoPing: 5
+svcEnvironment: v1
+tst: false
+twsBaseURL: /tws.proxy
+webApps:
+- {cache: true, index: index.html, listing: false, name: demo, proxy: ''}
+
+20:20:01.685 INFO  vert.x-eventloop-thread-0 GatewayHttpProxy     :  -> mount demo on /demo
+20:20:01.694 INFO  vert.x-eventloop-thread-0 GatewayVerticle      : version: a27ed42161ad96c53e715ca5c5e3e3fa4cff5262 Mon, 24 Apr 2023 15:41:53 -0400
+20:20:01.694 INFO  vert.x-eventloop-thread-0 GatewayVerticle      : Java Version: 17.0.15
+20:20:28.032 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /v1/api/iserver/auth/status,401|1090ms
+20:20:49.169 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /v1/api/iserver/auth/status,401|482ms
+20:21:06.071 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /sso/Login?forwardTo=22&RL=1&ip2loc=US,200|757ms
+20:21:06.073 INFO  vert.x-eventloop-thread-0 CookieManager        : set cookies [partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, URL_PARAM=forwardTo%3D22&RL%3D1&ip2loc%3DUS; Domain=.ibkr.com; Path=/;Secure, JSESSIONID=8658B8D64148D4D01F29E77B0C46D726.ny5wwwdam2-internet; Path=/sso; HttpOnly;Secure;SameSite=None, x-sess-uuid=0.c7986652.1778692865.4efbc0c; secure; HttpOnly]
+20:21:06.074 DEBUG vert.x-eventloop-thread-0 BaseServiceProxy     : Remapping Set-cookies [partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, URL_PARAM=forwardTo%3D22&RL%3D1&ip2loc%3DUS; Domain=.ibkr.com; Path=/;Secure, JSESSIONID=8658B8D64148D4D01F29E77B0C46D726.ny5wwwdam2-internet; Path=/sso; HttpOnly;Secure;SameSite=None, x-sess-uuid=0.c7986652.1778692865.4efbc0c; secure; HttpOnly] -> 
+20:21:06.584 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/bootstrap-5.2.2/bootstrap.min.css,200|485ms
+20:21:06.590 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/bootstrap-switch-3.3.2/bootstrap-switch.min.css,200|487ms
+20:21:06.595 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/ibkr/theme-ibkr-portal.min.css,200|462ms
+20:21:06.596 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/fontawesome-6.4.2/all.min.css,200|465ms
+20:21:06.697 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /scripts/common/js/jquery-3.7.0/jquery.min.js,200|565ms
+20:21:07.044 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/login.min.css,200|910ms
+20:21:07.047 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js,200|454ms
+20:21:07.057 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /sso/lib/xyz.bundle.min.js,200|403ms
+20:21:07.058 INFO  vert.x-eventloop-thread-0 CookieManager        : set cookies [x-sess-uuid=0.c7986652.1778692866.4efe5ce; secure; HttpOnly]
+20:21:07.058 DEBUG vert.x-eventloop-thread-0 BaseServiceProxy     : Remapping Set-cookies [x-sess-uuid=0.c7986652.1778692866.4efe5ce; secure; HttpOnly] -> 
+20:21:07.443 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-brand-logo.css,200|374ms
+20:21:07.449 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-alerts.css,200|376ms
+20:21:07.473 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-borders.css,200|402ms
+20:21:07.493 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/fonts.css,200|421ms
+20:21:07.517 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-buttons.css,200|434ms
+20:21:07.909 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-colors-theme.css,200|463ms
+20:21:07.911 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-colors-other.css,200|752ms
+20:21:07.913 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-forms.css,200|437ms
+20:21:07.916 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ar.css,200|420ms
+20:21:07.918 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-direction.css,200|466ms
+20:21:08.524 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ja.css,200|609ms
+20:21:08.527 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ko.css,200|609ms
+20:21:08.528 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ru.css,200|608ms
+20:21:08.530 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-hu.css,200|1010ms
+20:21:08.532 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-zh-hans.css,200|611ms
+20:21:09.138 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-reg-am.css,200|604ms
+20:21:09.139 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-typography.css,200|606ms
+20:21:09.140 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-tables.css,200|605ms
+20:21:09.141 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-zh-hant.css,200|1220ms
+20:21:09.141 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-sizing.css,200|606ms
+20:21:09.754 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-website.css,200|1217ms
+20:21:17.126 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /sso/Login?forwardTo=22&RL=1&ip2loc=US,200|755ms
+20:21:17.127 INFO  vert.x-eventloop-thread-0 CookieManager        : set cookies [partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, URL_PARAM=forwardTo%3D22&RL%3D1&ip2loc%3DUS; Domain=.ibkr.com; Path=/;Secure, JSESSIONID=5E0D2B8831CC8B08F458CF93C05616A6.ny5wwwdam2-internet; Path=/sso; HttpOnly;Secure;SameSite=None, x-sess-uuid=0.c7986652.1778692876.4efeb84; secure; HttpOnly]
+20:21:17.127 DEBUG vert.x-eventloop-thread-0 BaseServiceProxy     : Remapping Set-cookies [partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, URL_PARAM=forwardTo%3D22&RL%3D1&ip2loc%3DUS; Domain=.ibkr.com; Path=/;Secure, JSESSIONID=5E0D2B8831CC8B08F458CF93C05616A6.ny5wwwdam2-internet; Path=/sso; HttpOnly;Secure;SameSite=None, x-sess-uuid=0.c7986652.1778692876.4efeb84; secure; HttpOnly] -> 
+20:21:17.242 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /scripts/common/js/jquery-3.7.0/jquery.min.js,200|70ms
+20:21:17.743 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/bootstrap-5.2.2/bootstrap.min.css,200|574ms
+20:21:17.755 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/fontawesome-6.4.2/all.min.css,200|582ms
+20:21:17.758 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/ibkr/theme-ibkr-portal.min.css,200|586ms
+20:21:17.763 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/login.min.css,200|592ms
+20:21:17.764 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/bootstrap-switch-3.3.2/bootstrap-switch.min.css,200|591ms
+20:21:17.823 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js,200|568ms
+20:21:17.834 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /sso/lib/xyz.bundle.min.js,200|69ms
+20:21:17.834 INFO  vert.x-eventloop-thread-0 CookieManager        : set cookies [x-sess-uuid=0.95986652.1778692877.188e4662; secure; HttpOnly]
+20:21:17.835 DEBUG vert.x-eventloop-thread-0 BaseServiceProxy     : Remapping Set-cookies [x-sess-uuid=0.95986652.1778692877.188e4662; secure; HttpOnly] -> 
+20:21:18.356 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-alerts.css,200|581ms
+20:21:18.360 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-brand-logo.css,200|522ms
+20:21:18.363 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-borders.css,200|565ms
+20:21:18.365 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-buttons.css,200|527ms
+20:21:18.394 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/fonts.css,200|621ms
+20:21:18.969 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-direction.css,200|602ms
+20:21:18.973 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-colors-other.css,200|1064ms
+20:21:18.976 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-forms.css,200|607ms
+20:21:18.979 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-colors-theme.css,200|613ms
+20:21:19.014 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ar.css,200|644ms
+20:21:19.583 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-hu.css,200|1186ms
+20:21:19.584 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ja.css,200|603ms
+20:21:19.585 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-zh-hans.css,200|601ms
+20:21:19.586 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ko.css,200|604ms
+20:21:19.587 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-ru.css,200|603ms
+20:21:19.969 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-zh-hant.css,200|950ms
+20:21:19.976 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-reg-am.css,200|388ms
+20:21:19.978 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-typography.css,200|387ms
+20:21:19.980 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-sizing.css,200|392ms
+20:21:19.987 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-tables.css,200|397ms
+20:21:20.814 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/borders.css,200|829ms
+20:21:20.817 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/direction.css,200|834ms
+20:21:20.822 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/elements.css,200|837ms
+20:21:20.825 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-background.css,200|841ms
+20:21:20.863 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-website.css,200|1271ms
+20:21:21.244 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/data-theme.css,200|411ms
+20:21:21.250 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-border.css,200|1261ms
+20:21:21.255 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-fill.css,200|426ms
+20:21:21.258 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-text.css,200|428ms
+20:21:21.261 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/cursors.css,200|430ms
+20:21:21.623 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/image.css,200|754ms
+20:21:21.625 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/language-utilities.css,200|365ms
+20:21:21.648 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/lists.css,200|384ms
+20:21:21.650 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/links.css,200|387ms
+20:21:21.650 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/sizing.css,200|385ms
+20:21:22.347 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/spacing.css,200|1081ms
+20:21:22.353 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/webkit-utilities.css,200|701ms
+20:21:22.356 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/typography.css,200|730ms
+20:21:22.357 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/utilities.css,200|730ms
+20:21:22.359 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-badge.css,200|704ms
+20:21:22.963 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-danger.css,200|603ms
+20:21:22.967 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button.css,200|609ms
+20:21:22.969 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-btn-close.css,200|1313ms
+20:21:22.971 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-black.css,200|611ms
+20:21:22.973 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-default.css,200|612ms
+20:21:23.579 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-info.css,200|1217ms
+20:21:23.582 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-success.css,200|608ms
+20:21:23.588 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-secondary.css,200|612ms
+20:21:23.590 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-warning.css,200|612ms
+20:21:23.626 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-primary.css,200|651ms
+20:21:24.191 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-button-tertiary.css,200|1213ms
+20:21:24.193 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-checkbox.css,200|600ms
+20:21:24.198 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-collapse-link.css,200|606ms
+20:21:24.200 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-dropdown-menu.css,200|605ms
+20:21:24.203 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-dropdown.css,200|609ms
+20:21:24.807 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-form.css,200|1176ms
+20:21:24.811 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-input-group.css,200|609ms
+20:21:24.813 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-label.css,200|609ms
+20:21:24.814 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-input.css,200|613ms
+20:21:24.816 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-modal.css,200|612ms
+20:21:25.420 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-popover.css,200|603ms
+20:21:25.421 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-nav-tabs.css,200|1216ms
+20:21:25.422 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-radio.css,200|604ms
+20:21:25.422 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-select.css,200|605ms
+20:21:25.423 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-switch.css,200|603ms
+20:21:25.925 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/js-select2-4-0-13.css,200|499ms
+20:21:25.926 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-tooltip.css,200|503ms
+20:21:25.927 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/js-animate.css,200|502ms
+20:21:25.928 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/js-switchery.css,200|501ms
+20:21:25.979 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/overrides/bs-textarea.css,200|1159ms
+20:21:26.309 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-danger.css,200|379ms
+20:21:26.314 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-gray.css,200|383ms
+20:21:26.336 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-info.css,200|404ms
+20:21:26.341 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert.css,200|913ms
+20:21:26.374 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-primary.css,200|440ms
+20:21:26.836 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-no-results.css,200|494ms
+20:21:26.838 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-secondary.css,200|853ms
+20:21:26.842 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/banner-cookies.css,200|498ms
+20:21:26.844 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-success.css,200|528ms
+20:21:26.845 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/alert-warning.css,200|526ms
+20:21:27.266 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/checkbox.css,200|420ms
+20:21:27.268 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/btn-switch.css,200|421ms
+20:21:27.271 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/brand-logo.css,200|893ms
+20:21:27.272 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/btn-icon.css,200|426ms
+20:21:27.274 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/logo-white-branding.css,200|426ms
+20:21:27.878 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/modal-cookies.css,200|1030ms
+20:21:27.881 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/base/am-animations.css,200|606ms
+20:21:27.884 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/search.css,200|608ms
+20:21:27.886 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/components/radio.css,200|611ms
+20:21:27.887 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/components/load-bar.css,200|609ms
+20:21:28.492 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/base/elements.css,200|1214ms
+20:21:28.496 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/pages/login.css,200|607ms
+20:21:28.502 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/components/refresh-block.css,200|613ms
+20:21:28.503 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/components/panel-btns.css,200|614ms
+20:21:28.588 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /images/common/logos/ibkr/interactive-brokers.svg,200|47ms
+20:21:28.663 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /fonts/fontawesome-6.4.2/webfonts/fa-solid-900.woff2,200|103ms
+20:21:28.672 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /fonts/fontawesome-6.4.2/webfonts/fa-brands-400.woff2,200|113ms
+20:21:28.675 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /fonts/proxima-nova/Proxima-Nova-Regular.woff2,200|118ms
+20:21:28.676 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /fonts/proxima-nova/Proxima-Nova-Semibold.woff2,200|118ms
+20:21:28.733 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /images/web/favicons/home-screen-icon-128x128.png,200|36ms
+20:21:28.988 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /portal.proxy/v1/gstat/bulletins,204|398ms
+20:21:29.302 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /sso/report,200|727ms
+20:21:29.302 INFO  vert.x-eventloop-thread-0 CookieManager        : set cookies [x-sess-uuid=0.c7986652.1778692888.4f01ce9; secure; HttpOnly]
+20:21:29.303 DEBUG vert.x-eventloop-thread-0 BaseServiceProxy     : Remapping Set-cookies [x-sess-uuid=0.c7986652.1778692888.4f01ce9; secure; HttpOnly] -> 
+20:23:50.419 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /sso/Login?forwardTo=22&RL=1&ip2loc=US,200|869ms
+20:23:50.420 INFO  vert.x-eventloop-thread-0 CookieManager        : set cookies [partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, URL_PARAM=forwardTo%3D22&RL%3D1&ip2loc%3DUS; Domain=.ibkr.com; Path=/;Secure, JSESSIONID=D6335EDF69D6E7067483B98995E920AF.ny5wwwdam2-internet; Path=/sso; HttpOnly;Secure;SameSite=None, x-sess-uuid=0.95986652.1778693029.188e5d47; secure; HttpOnly]
+20:23:50.420 DEBUG vert.x-eventloop-thread-0 BaseServiceProxy     : Remapping Set-cookies [partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, partnerID=""; Domain=.ibkr.com; Expires=Thu, 01 Jan 1970 00:00:10 GMT; Path=/;Secure;SameSite=None, URL_PARAM=forwardTo%3D22&RL%3D1&ip2loc%3DUS; Domain=.ibkr.com; Path=/;Secure, JSESSIONID=D6335EDF69D6E7067483B98995E920AF.ny5wwwdam2-internet; Path=/sso; HttpOnly;Secure;SameSite=None, x-sess-uuid=0.95986652.1778693029.188e5d47; secure; HttpOnly] -> 
+20:23:51.032 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /scripts/common/js/jquery-3.7.0/jquery.min.js,304|599ms
+20:23:51.033 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/ibkr/theme-ibkr-portal.min.css,304|603ms
+20:23:51.033 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /sso/lib/xyz.bundle.min.js,304|600ms
+20:23:51.033 INFO  vert.x-eventloop-thread-0 CookieManager        : set cookies [x-sess-uuid=0.c7986652.1778693030.4f01e0f; secure; HttpOnly]
+20:23:51.033 DEBUG vert.x-eventloop-thread-0 BaseServiceProxy     : Remapping Set-cookies [x-sess-uuid=0.c7986652.1778693030.4f01e0f; secure; HttpOnly] -> 
+20:23:51.035 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /scripts/common/js/bootstrap-5.2.2/bootstrap.bundle.min.js,200|603ms
+20:23:51.041 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/am/login.min.css,304|608ms
+20:23:51.567 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-sizing.css,200|515ms
+20:23:51.568 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-alerts.css,304|516ms
+20:23:51.568 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/fonts.css,304|522ms
+20:23:51.569 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-language-zh-hant.css,200|518ms
+20:23:51.570 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-reg-am.css,200|518ms
+20:23:51.954 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-borders.css,304|383ms
+20:23:51.955 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-tables.css,200|902ms
+20:23:51.967 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-typography.css,200|396ms
+20:23:51.968 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/direction.css,200|397ms
+20:23:51.982 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-website.css,200|411ms
+20:23:52.569 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/abstracts/variables-brand-logo.css,304|613ms
+20:23:52.570 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/elements.css,200|998ms
+20:23:52.571 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/borders.css,200|615ms
+20:23:52.572 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-background.css,200|603ms
+20:23:52.574 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-border.css,200|605ms
+20:23:53.159 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-fill.css,200|1175ms
+20:23:53.160 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/data-theme.css,200|585ms
+20:23:53.160 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/cursors.css,200|585ms
+20:23:53.161 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/colors-text.css,200|585ms
+20:23:53.162 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/image.css,200|586ms
+20:23:53.798 INFO  vert.x-eventloop-thread-0 BaseServiceProxy     : -> GET /css/common/base/language-utilities.css,200|1222ms

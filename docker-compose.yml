@@ -128,7 +128,7 @@ services:
         python /app/scripts/seed_subscriptions.py
     restart: "no"
 
-  polymarket-kafka:
+  polymarket-event-producer:
     build: .
     depends_on:
       kafka:
@@ -152,7 +152,7 @@ services:
         echo "MongoDB is ready!"
         python -m polymarket_kafka
 
-  stock-news-kafka:
+  stock-news-event-producer:
     build: .
     depends_on:
       kafka:
@@ -176,7 +176,7 @@ services:
         python -m stock_news_kafka
     restart: on-failure
 
-  stock-analytics-kafka:
+  stock-analytics-event-producer:
     build: .
     depends_on:
       kafka:
@@ -200,7 +200,7 @@ services:
         python -m stock_analytics_kafka
     restart: on-failure
 
-  strategy-injestor:
+  polymarket-event-consumer:
     build: .
     depends_on:
       kafka:
@@ -208,7 +208,7 @@ services:
       couchbase-init:
         condition: service_completed_successfully
     env_file:
-      - env/strategy-injestor.env
+      - env/polymarket-consumer.env
     entrypoint:
       - /bin/bash
       - -c
@@ -223,6 +223,105 @@ services:
         python -m strategy_injestor
     restart: on-failure
 
+  stock-news-event-consumer:
+    build: .
+    depends_on:
+      kafka:
+        condition: service_healthy
+      couchbase-init:
+        condition: service_completed_successfully
+    env_file:
+      - env/stock-news-consumer.env
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for Kafka to be ready..."
+        for idx in {1..30}; do
+          echo "Attempt $$idx to check Kafka..."
+          nc -zv kafka 29092 && break
+          sleep 1
+        done
+        echo "Kafka is ready!"
+        python -m strategy_injestor
+    restart: on-failure
+
+  stock-analytics-event-consumer:
+    build: .
+    depends_on:
+      kafka:
+        condition: service_healthy
+      couchbase-init:
+        condition: service_completed_successfully
+    env_file:
+      - env/stock-analytics-consumer.env
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for Kafka to be ready..."
+        for idx in {1..30}; do
+          echo "Attempt $$idx to check Kafka..."
+          nc -zv kafka 29092 && break
+          sleep 1
+        done
+        echo "Kafka is ready!"
+        python -m strategy_injestor
+    restart: on-failure
+
+  web-bff-api:
+    build: ./src/web-app/bff
+    depends_on:
+      mongo:
+        condition: service_started
+      couchbase:
+        condition: service_healthy
+    env_file:
+      - env/web-bff.env
+    ports:
+      - "5001:5001"
+    restart: on-failure
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    depends_on:
+      - web-bff-api
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+
+  web-client-ui:
+    build: ./src/web-app/web-client
+    depends_on:
+      - web-bff-api
+    env_file:
+      - env/web-client.env
+    ports:
+      - "5173:5173"
+    restart: on-failure
+
 volumes:
   mongo-data:
   couchbase-data:
+  prometheus-data:
+  grafana-data:

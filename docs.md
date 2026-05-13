@@ -719,7 +719,6 @@ All env files live in `env/` (git-ignored). Each Docker Compose service has its 
 | `POLYMARKET_RATE_LIMIT_DELAY_MS` | No | `200` |
 | `POLL_INTERVAL_SECONDS` | No | `30` |
 | `LOG_LEVEL` | No | `INFO` |
-| `DISCORD_WEBHOOK_URL` | No | _(empty)_ |
 
 ### env/stock-news-kafka.env *(new)*
 
@@ -736,7 +735,6 @@ All env files live in `env/` (git-ignored). Each Docker Compose service has its 
 | `POLL_INTERVAL_SECONDS` | No | `300` |
 | `NEWS_LOOKBACK_HOURS` | No | `6` |
 | `LOG_LEVEL` | No | `INFO` |
-| `DISCORD_WEBHOOK_URL` | No | _(empty)_ |
 
 Get a free Finnhub API key at https://finnhub.io — free tier allows 60 calls/min.
 
@@ -753,7 +751,6 @@ Get a free Finnhub API key at https://finnhub.io — free tier allows 60 calls/m
 | `POLL_INTERVAL_SECONDS` | No | `900` (15 min) |
 | `SIGNAL_COOLDOWN_HOURS` | No | `4` |
 | `LOG_LEVEL` | No | `INFO` |
-| `DISCORD_WEBHOOK_URL` | No | _(empty)_ |
 
 No API key needed — uses yfinance (Yahoo Finance).
 
@@ -770,7 +767,6 @@ No API key needed — uses yfinance (Yahoo Finance).
 | `COUCHBASE_BUCKET` | No | `polymarket` |
 | `POLL_INTERVAL_MS` | No | `1000` |
 | `LOG_LEVEL` | No | `INFO` |
-| `DISCORD_WEBHOOK_URL` | No | _(empty)_ |
 
 ### BFF — src/web-app/bff/.env
 
@@ -863,9 +859,9 @@ COUCHBASE_CONNECTION_STRING=couchbase://localhost \
 python -m strategy_injestor
 ```
 
-### Discord logging (optional)
+### Logging
 
-Set `DISCORD_WEBHOOK_URL` in any Python service env file. Logs at or above `DISCORD_LOG_LEVEL` (defaults to `LOG_LEVEL`) will be posted to the webhook. The handler is fire-and-forget — webhook failures never crash the service.
+All services now emit structured console logs with a service name, timestamp, level, and payload. Use `LOG_LEVEL` to control verbosity and `LOG_FORMAT=text` if you want plain text instead of JSON.
 
 ---
 
@@ -901,7 +897,7 @@ polymarket-event-injestor/
 │   │   ├── subscription_manager.py       # MongoDB ref-count CRUD
 │   │   ├── event_builder.py
 │   │   ├── models.py                     # PolymarketEvent, PolymarketSubscription
-│   │   └── discord_logging.py
+│   │   └── pro_logging.py
 │   │
 │   ├── stock_news_kafka/                 # Pipeline 2 — Stock Hot News Producer
 │   │   ├── __main__.py
@@ -913,7 +909,7 @@ polymarket-event-injestor/
 │   │   ├── subscription_manager.py       # MongoDB ref-count CRUD (stock_news_subscriptions)
 │   │   ├── event_builder.py
 │   │   ├── models.py                     # StockNewsEvent, StockNewsSubscription
-│   │   └── discord_logging.py
+│   │   └── pro_logging.py
 │   │
 │   ├── stock_analytics_kafka/            # Pipeline 3 — Sharp Stock Analytics Producer
 │   │   ├── __main__.py
@@ -925,7 +921,7 @@ polymarket-event-injestor/
 │   │   ├── subscription_manager.py       # MongoDB ref-count CRUD (stock_analytics_subscriptions)
 │   │   ├── event_builder.py
 │   │   ├── models.py                     # StockAnalyticsEvent, StockAnalyticsSubscription
-│   │   └── discord_logging.py
+│   │   └── pro_logging.py
 │   │
 │   ├── strategy_injestor/                # Multi-Pipeline Consumer → Couchbase
 │   │   ├── __main__.py
@@ -933,7 +929,7 @@ polymarket-event-injestor/
 │   │   ├── runner.py                     # Routes by pipeline field → Couchbase
 │   │   ├── kafka_consumer.py             # Multi-topic subscribe
 │   │   ├── couchbase_client.py           # upsert_event() routes by pipeline
-│   │   └── discord_logging.py
+│   │   └── pro_logging.py
 │   │
 │   └── web-app/
 │       ├── bff/                          # Node.js / Express API (TypeScript)

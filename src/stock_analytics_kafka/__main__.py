@@ -11,8 +11,9 @@ import os
 import signal
 
 from .config import load_config
-from .discord_logging import attach_discord_logging
 from .runner import StockAnalyticsKafkaRunner
+from observability.metrics import start_metrics_server
+from observability.pro_logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,8 @@ def _setup_logging() -> None:
 
 
 async def _main() -> None:
-    _setup_logging()
-    attach_discord_logging(service_name="stock-analytics-kafka")
+    setup_logging(service_name="stock-analytics-kafka")
+    start_metrics_server("stock-analytics-kafka", 9103)
 
     config = load_config()
     runner = StockAnalyticsKafkaRunner(config)

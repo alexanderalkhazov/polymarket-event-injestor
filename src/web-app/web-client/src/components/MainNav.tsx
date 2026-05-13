@@ -27,6 +27,12 @@ export const MainNav = () => {
       >
         Pollymarket Events
       </button>
+      <button
+        className={`main-nav-btn ${location.pathname === '/trading' ? 'active' : ''}`}
+        onClick={() => navigate('/trading')}
+      >
+        Trading
+      </button>
 
       <div className="main-nav-spacer" />
 

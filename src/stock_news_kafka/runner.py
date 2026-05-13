@@ -6,12 +6,13 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from .config import AppConfig
-from .data_source import FinnhubClient, NewsArticle
+from .data_source import FinnhubClient
 from .event_builder import build_stock_news_event, event_to_dict
 from .hotness_detector import NewsHotnessState, compute_hotness, is_hot
 from .kafka_client import KafkaClient
 from .models import StockNewsSubscription
 from .subscription_manager import SubscriptionManager
+from observability.metrics import cycle_timer, record_error, record_published_event, record_skipped_event
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class StockNewsKafkaRunner:
         published = 0
         for article in articles:
             if state.is_seen(article.article_id):
+                record_skipped_event("stock-news-kafka", "duplicate_article")
                 continue
 
             age_hours = (now - article.published_at).total_seconds() / 3600
@@ -57,10 +59,12 @@ class StockNewsKafkaRunner:
 
             if not is_hot(hotness, subscription.min_hotness_score):
                 state.mark_seen(article.article_id)  # Mark so we don't re-score
+                record_skipped_event("stock-news-kafka", "below_threshold")
                 continue
 
             event = build_stock_news_event(article, hotness, subscription)
             self._kafka.publish_event(event_to_dict(event), key=ticker)
+            record_published_event("stock-news-kafka", "stock-news")
             state.mark_seen(article.article_id)
             published += 1
             logger.info(
@@ -82,6 +86,7 @@ class StockNewsKafkaRunner:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for res in results:
             if isinstance(res, Exception):
+                record_error("stock-news-kafka", "process_subscription")
                 logger.error("Error processing subscription: %s", res, exc_info=res)
 
     async def run(self) -> None:
@@ -94,8 +99,10 @@ class StockNewsKafkaRunner:
         )
         while self._running:
             try:
-                await self.run_once()
+                with cycle_timer("stock-news-kafka"):
+                    await self.run_once()
             except Exception as exc:
+                record_error("stock-news-kafka", "run_cycle")
                 logger.exception("Unexpected error in run cycle: %s", exc)
             await asyncio.sleep(self._config.poll_interval_seconds)
 

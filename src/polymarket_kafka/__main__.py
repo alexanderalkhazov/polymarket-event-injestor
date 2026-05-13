@@ -6,26 +6,12 @@ import os
 import signal
 
 from .config import load_config
-from .discord_logging import ServiceFilter, attach_discord_logging
 from .data_source import PolymarketClient
 from .kafka_client import KafkaClient
 from .runner import PolymarketKafkaRunner
 from .subscription_manager import SubscriptionManager
-
-
-def configure_logging() -> None:
-    level_name = os.getenv("LOG_LEVEL", "INFO")
-    level = getattr(logging, level_name.upper(), logging.INFO)
-    log_format = "%(asctime)s | %(levelname)s | %(service)s | %(name)s | %(message)s"
-    logging.basicConfig(
-        level=level,
-        format=log_format,
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
-    )
-    service_name = os.getenv("SERVICE_NAME", "polymarket-kafka")
-    for handler in logging.getLogger().handlers:
-        handler.addFilter(ServiceFilter(service_name))
-    attach_discord_logging(service_name=service_name, formatter=log_format)
+from observability.metrics import start_metrics_server
+from observability.pro_logging import setup_logging
 
 
 async def main_async() -> None:
@@ -65,10 +51,11 @@ async def main_async() -> None:
 
 
 def main() -> None:
-    configure_logging()
+    setup_logging(service_name=os.getenv("SERVICE_NAME", "polymarket-kafka"))
     logger = logging.getLogger(__name__)
     try:
         logger.info("Starting polymarket-kafka service...")
+        start_metrics_server("polymarket-kafka", 9101)
         asyncio.run(main_async())
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

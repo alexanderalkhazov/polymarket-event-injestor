@@ -10,6 +10,13 @@ from .models import StockNewsEvent, StockNewsSubscription
 
 logger = logging.getLogger(__name__)
 
+_STOCK_NEWS_EVENT_NS = uuid.UUID("9d6f65d8-8d58-4e1b-9f4d-ece65eab2df7")
+
+
+def _stable_event_id(article: NewsArticle, subscription: StockNewsSubscription) -> str:
+    raw = f"{subscription.ticker}|{article.article_id}|{int(article.published_at.timestamp())}"
+    return str(uuid.uuid5(_STOCK_NEWS_EVENT_NS, raw))
+
 
 def build_stock_news_event(
     article: NewsArticle,
@@ -18,7 +25,7 @@ def build_stock_news_event(
 ) -> StockNewsEvent:
     """Construct a StockNewsEvent from a NewsArticle + hotness result."""
     return StockNewsEvent(
-        event_id=str(uuid.uuid4()),
+        event_id=_stable_event_id(article, subscription),
         timestamp=article.published_at,
         ticker=subscription.ticker,
         company_name=subscription.company_name or subscription.ticker,

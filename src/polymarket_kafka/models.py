@@ -45,6 +45,7 @@ class PolymarketEvent(BaseModel):
     )
     volume: Optional[float] = Field(None, ge=0.0, description="Trading volume")
     liquidity: Optional[float] = Field(None, ge=0.0, description="Market liquidity")
+    pipeline: str = Field(default="polymarket", description="Pipeline identifier for routing")
 
     model_config = {"extra": "forbid", "frozen": True}
 

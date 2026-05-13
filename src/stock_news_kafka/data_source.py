@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from requests import Session
+from requests.adapters import HTTPAdapter
 
 from .config import FinnhubConfig
 
@@ -39,6 +40,9 @@ class FinnhubClient:
         self._config = config
         self._session: Session = requests.Session()
         self._session.headers.update({"X-Finnhub-Token": config.api_key})
+        adapter = HTTPAdapter(pool_connections=config.http_pool_maxsize, pool_maxsize=config.http_pool_maxsize)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
         self._last_request_time: float = 0.0
 
     def _rate_limit(self) -> None:
