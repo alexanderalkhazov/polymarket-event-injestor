@@ -40,4 +40,17 @@ curl -sf -X POST http://${CB_HOST}:8091/pools/default/buckets \
     2>/dev/null || echo "Bucket may already exist, continuing..."
 
 sleep 2
-echo "Couchbase setup complete: bucket '${BUCKET_NAME}' ready."
+
+# Create named collections inside _default scope
+echo "Creating named collections in bucket '${BUCKET_NAME}'..."
+for COLL in polymarket stock_news stock_analytics; do
+  curl -sf -X POST \
+    "http://${CB_HOST}:8091/pools/default/buckets/${BUCKET_NAME}/scopes/_default/collections" \
+    -u "${CB_ADMIN_USER}:${CB_ADMIN_PASS}" \
+    -d "name=${COLL}" \
+    2>/dev/null || echo "Collection '${COLL}' may already exist, continuing..."
+  echo "  → collection '${COLL}' ready"
+done
+
+sleep 2
+echo "Couchbase setup complete: bucket '${BUCKET_NAME}' with collections [polymarket, stock_news, stock_analytics] ready."

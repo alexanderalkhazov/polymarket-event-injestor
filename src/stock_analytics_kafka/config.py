@@ -12,32 +12,32 @@ from dotenv import load_dotenv
 @dataclass
 class KafkaConfig:
     bootstrap_servers: str
-    topics: str  # Comma-separated list of topics to consume
-    group_id: str = "strategy-injestor"
+    topic: str
     security_protocol: str = "PLAINTEXT"
     sasl_mechanisms: str = "PLAIN"
     sasl_username: str = ""
     sasl_password: str = ""
+    client_id: str = "stock-analytics-kafka-producer"
 
 
 @dataclass
-class CouchbaseConfig:
-    connection_string: str
-    username: str
-    password: str
-    bucket: str
+class MongoConfig:
+    uri: str
+    database: str
+    collection: str = "stock_analytics_subscriptions"
+    poll_interval_seconds: int = 300
 
 
 @dataclass
 class AppConfig:
     kafka: KafkaConfig
-    couchbase: CouchbaseConfig
+    mongodb: MongoConfig
     environment: str = "dev"
-    poll_interval_ms: int = 1000  # Poll interval in milliseconds
-    
+    poll_interval_seconds: int = 900    # Poll analytics every 15 minutes
+    signal_cooldown_hours: float = 4.0  # Per-ticker per-signal cooldown
+
 
 def _load_dotenv() -> None:
-    """Load environment variables from a .env file if present."""
     project_root = Path(__file__).resolve().parents[2]
     dotenv_path = project_root / ".env"
     if dotenv_path.exists():
@@ -47,7 +47,6 @@ def _load_dotenv() -> None:
 
 
 def _get_env(name: str, default: Optional[str] = None, required: bool = False) -> str:
-    """Helper to read environment variables with optional default and 'required' flag."""
     value = os.getenv(name, default)
     if required and (value is None or value == ""):
         raise RuntimeError(f"Required environment variable {name!r} is not set")
@@ -55,31 +54,29 @@ def _get_env(name: str, default: Optional[str] = None, required: bool = False) -
 
 
 def load_config() -> AppConfig:
-    """Load application configuration from environment variables."""
     _load_dotenv()
 
     kafka = KafkaConfig(
-        bootstrap_servers=_get_env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092", required=True),
-        topics=_get_env(
-            "KAFKA_TOPICS", "polymarket-events,stock-news-events,stock-analytics-events"
-        ),
-        group_id=_get_env("KAFKA_GROUP_ID", "strategy-injestor"),
+        bootstrap_servers=_get_env("KAFKA_BOOTSTRAP_SERVERS", required=True),
+        topic=_get_env("KAFKA_TOPIC", "stock-analytics-events"),
         security_protocol=_get_env("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
         sasl_mechanisms=_get_env("KAFKA_SASL_MECHANISMS", "PLAIN"),
         sasl_username=_get_env("KAFKA_SASL_USERNAME", ""),
         sasl_password=_get_env("KAFKA_SASL_PASSWORD", ""),
+        client_id=_get_env("KAFKA_CLIENT_ID", "stock-analytics-kafka-producer"),
     )
 
-    couchbase = CouchbaseConfig(
-        connection_string=_get_env("COUCHBASE_CONNECTION_STRING", "couchbase://couchbase"),
-        username=_get_env("COUCHBASE_USERNAME", "Administrator"),
-        password=_get_env("COUCHBASE_PASSWORD", "password"),
-        bucket=_get_env("COUCHBASE_BUCKET", "polymarket"),
+    mongodb = MongoConfig(
+        uri=_get_env("MONGODB_URI", required=True),
+        database=_get_env("MONGODB_DATABASE", required=True),
+        collection=_get_env("MONGODB_COLLECTION", "stock_analytics_subscriptions"),
+        poll_interval_seconds=int(_get_env("MONGODB_POLL_INTERVAL_SECONDS", "300")),
     )
 
     return AppConfig(
         kafka=kafka,
-        couchbase=couchbase,
+        mongodb=mongodb,
         environment=_get_env("ENVIRONMENT", "dev"),
-        poll_interval_ms=int(_get_env("POLL_INTERVAL_MS", "1000")),
+        poll_interval_seconds=int(_get_env("POLL_INTERVAL_SECONDS", "900")),
+        signal_cooldown_hours=float(_get_env("SIGNAL_COOLDOWN_HOURS", "4")),
     )

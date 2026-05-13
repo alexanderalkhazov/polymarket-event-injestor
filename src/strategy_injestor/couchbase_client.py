@@ -6,16 +6,23 @@ from typing import Any, Dict
 
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster, ClusterOptions
+from couchbase.collection import Collection
 
 logger = logging.getLogger(__name__)
 
+# Named collections inside the _default scope — one per pipeline
+_COLLECTION_POLYMARKET = "polymarket"
+_COLLECTION_STOCK_NEWS = "stock_news"
+_COLLECTION_STOCK_ANALYTICS = "stock_analytics"
+
 
 class CouchbaseClient:
-    """Couchbase client for persisting conviction events.
+    """Couchbase client that routes events into three named collections within one bucket.
 
-    Each event is upserted as a document keyed by market_id, so the latest
-    conviction state per market is always available for querying.
-    A separate time-series document (keyed by event_id) stores the full history.
+    Collections (under _default scope):
+      polymarket       — Pipeline 1 conviction events
+      stock_news       — Pipeline 2 hot news events
+      stock_analytics  — Pipeline 3 sharp analytics signals
     """
 
     def __init__(self, connection_string: str, username: str, password: str, bucket_name: str) -> None:
@@ -26,37 +33,60 @@ class CouchbaseClient:
         self._cluster = Cluster(connection_string, ClusterOptions(auth))
         self._cluster.wait_until_ready(timedelta(seconds=15))
 
-        self._bucket = self._cluster.bucket(bucket_name)
-        self._collection = self._bucket.default_collection()
-        logger.info("Couchbase connected — bucket=%s", bucket_name)
+        bucket = self._cluster.bucket(bucket_name)
+        scope = bucket.scope("_default")
+
+        self._col_polymarket: Collection = scope.collection(_COLLECTION_POLYMARKET)
+        self._col_stock_news: Collection = scope.collection(_COLLECTION_STOCK_NEWS)
+        self._col_stock_analytics: Collection = scope.collection(_COLLECTION_STOCK_ANALYTICS)
+
+        logger.info(
+            "Couchbase connected — bucket=%s collections=[%s, %s, %s]",
+            bucket_name,
+            _COLLECTION_POLYMARKET,
+            _COLLECTION_STOCK_NEWS,
+            _COLLECTION_STOCK_ANALYTICS,
+        )
+
+    def _route_collection(self, pipeline: str) -> Collection:
+        if pipeline == "stock-news":
+            return self._col_stock_news
+        if pipeline == "stock-analytics":
+            return self._col_stock_analytics
+        return self._col_polymarket
 
     def upsert_event(self, event: Dict[str, Any]) -> None:
-        """Persist a conviction event to Couchbase.
+        """Persist an event into the appropriate named collection.
 
-        Two documents are written atomically (best-effort):
-        1. `market::{market_id}` — latest state per market (overwritten each time)
-        2. `event::{event_id}` — immutable event history record
+        Two documents are written per event:
+        1. Latest-state document (overwritten each time) — short key per entity
+        2. Immutable history record — keyed by event_id
         """
-        market_id = event.get("market_id", "unknown")
+        pipeline = event.get("pipeline", "polymarket")
         event_id = event.get("event_id", "unknown")
+        collection = self._route_collection(pipeline)
 
-        # Latest state per market — always overwritten
-        market_key = f"market::{market_id}"
-        self._collection.upsert(market_key, {
-            "type": "market_latest",
-            **event,
-        })
+        if pipeline == "stock-news":
+            ticker = event.get("ticker", "unknown")
+            state_key = f"latest::{ticker}"
+        elif pipeline == "stock-analytics":
+            ticker = event.get("ticker", "unknown")
+            signal_type = event.get("signal_type", "unknown")
+            state_key = f"latest::{ticker}::{signal_type}"
+        else:
+            market_id = event.get("market_id", "unknown")
+            state_key = f"latest::{market_id}"
 
-        # Immutable event history
-        event_key = f"event::{event_id}"
-        self._collection.upsert(event_key, {
-            "type": "conviction_event",
-            **event,
-        })
+        collection.upsert(state_key, {"type": f"{pipeline}_latest", **event})
+        collection.upsert(f"event::{event_id}", {"type": f"{pipeline}_event", **event})
 
-        logger.info("Persisted event %s for market %s to Couchbase", event_id[:12], market_id[:16])
+        logger.info(
+            "Persisted %s event %s → collection=%s key=%s",
+            pipeline,
+            event_id[:12],
+            collection.name,
+            state_key,
+        )
 
     def close(self) -> None:
-        """Close the Couchbase connection."""
-        # The Python SDK handles cleanup on garbage collection
         logger.info("Couchbase client closed")

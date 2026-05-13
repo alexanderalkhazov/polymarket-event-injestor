@@ -12,16 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class KafkaConsumer:
-    """Kafka consumer for consuming conviction events from polymarket-events topic.
-    
-    ===== KAFKA CONSUMER (CONSUMPTION SIDE) =====
-    
-    This service CONSUMES events published by polymarket-kafka service.
-    Events arrive as JSON messages on the 'polymarket-events' Kafka topic.
-    
-    This is the CONSUMER side of the data pipeline.
-    The PRODUCER side is the polymarket-kafka service that publishes events.
-    """
+    """Kafka consumer subscribing to all 3 pipeline topics."""
 
     def __init__(self, config: KafkaConfig) -> None:
         self._config = config
@@ -43,23 +34,19 @@ class KafkaConsumer:
                 }
             )
 
+        topic_list = [t.strip() for t in config.topics.split(",") if t.strip()]
         logger.info(
-            "Initializing Kafka consumer for bootstrap_servers=%s topic=%s group_id=%s",
+            "Initializing Kafka consumer bootstrap_servers=%s topics=%s group_id=%s",
             config.bootstrap_servers,
-            config.topic,
+            topic_list,
             config.group_id,
         )
         self._consumer = Consumer(consumer_conf)
-        self._consumer.subscribe([config.topic])
-        logger.info("Kafka consumer initialized and subscribed to topic '%s'", config.topic)
+        self._consumer.subscribe(topic_list)
+        logger.info("Kafka consumer subscribed to topics: %s", topic_list)
 
     def poll(self, timeout_ms: int) -> Optional[Dict[str, Any]]:
-        """Poll for a single message from the Kafka topic.
-        
-        ===== CONSUMING FROM KAFKA =====
-        Retrieves conviction events published by polymarket-kafka service.
-        Returns deserialized JSON event or None if timeout.
-        """
+        """Poll for a single message from any subscribed topic. Returns None on timeout."""
         msg = self._consumer.poll(timeout_ms / 1000.0)
 
         if msg is None:

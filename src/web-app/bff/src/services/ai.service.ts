@@ -29,23 +29,21 @@ class AIService {
   // Retrieve recent Polymarket events from Couchbase
   async getRecentEvents(limit: number = 100): Promise<PolymarketEvent[]> {
     try {
-      const bucketName = config.couchbase.bucket;
-
-      // If limit is 0 or negative, fetch all events (no limit)
+      const b = config.couchbase.bucket;
+      // Query the named `polymarket` collection inside _default scope
       const query = limit > 0
         ? `SELECT d.*
-           FROM \`${bucketName}\` AS d
+           FROM \`${b}\`.\`_default\`.\`polymarket\` AS d
            ORDER BY STR_TO_MILLIS(d.timestamp) DESC
            LIMIT $limit`
         : `SELECT d.*
-           FROM \`${bucketName}\` AS d
+           FROM \`${b}\`.\`_default\`.\`polymarket\` AS d
            ORDER BY STR_TO_MILLIS(d.timestamp) DESC`;
 
       let rows = await queryCouchbase<CouchbasePolymarketEvent>(
         query,
         limit > 0 ? { limit } : {}
       );
-
       const events: PolymarketEvent[] = rows.map((row) => {
         const marketId = row.market_id || 'unknown';
         const currentPrice =

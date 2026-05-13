@@ -91,11 +91,20 @@ services:
           -d "ramQuota=128" \
           -d "bucketType=couchbase" \
           -d "flushEnabled=1" || echo "Bucket may already exist"
-        sleep 3
+        sleep 5
+
+        echo "Step 5: Creating named collections..."
+        for COLL in polymarket stock_news stock_analytics; do
+          curl -sf -X POST \
+            "http://couchbase:8091/pools/default/buckets/polymarket/scopes/_default/collections" \
+            -u Administrator:password \
+            -d "name=$$COLL" || echo "Collection $$COLL may already exist"
+          sleep 1
+        done
 
         echo "Verifying..."
         curl -sf -u Administrator:password http://couchbase:8091/pools/default/buckets | grep -q polymarket \
-          && echo "Couchbase init COMPLETE — bucket 'polymarket' ready." \
+          && echo "Couchbase init COMPLETE — bucket 'polymarket' with collections [polymarket, stock_news, stock_analytics] ready." \
           || echo "WARNING: bucket verification failed"
     restart: "no"
 
@@ -142,6 +151,54 @@ services:
         done
         echo "MongoDB is ready!"
         python -m polymarket_kafka
+
+  stock-news-kafka:
+    build: .
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      seed-subscriptions:
+        condition: service_completed_successfully
+    env_file:
+      - env/stock-news-kafka.env
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for MongoDB to be ready..."
+        for idx in {1..30}; do
+          nc -zv mongo 27017 && break
+          sleep 1
+        done
+        echo "MongoDB is ready!"
+        python -m stock_news_kafka
+    restart: on-failure
+
+  stock-analytics-kafka:
+    build: .
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      seed-subscriptions:
+        condition: service_completed_successfully
+    env_file:
+      - env/stock-analytics-kafka.env
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "Waiting for MongoDB to be ready..."
+        for idx in {1..30}; do
+          nc -zv mongo 27017 && break
+          sleep 1
+        done
+        echo "MongoDB is ready!"
+        python -m stock_analytics_kafka
+    restart: on-failure
 
   strategy-injestor:
     build: .
