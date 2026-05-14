@@ -1,13 +1,15 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
-  BookMarked,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Globe,
+  LayoutDashboard,
   LineChart,
   LogOut,
   MessageSquare,
+  Newspaper,
   Settings,
   TrendingUp,
   Zap,
@@ -23,13 +25,35 @@ interface NavItem {
   icon: React.ElementType;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { href: '/dashboard', label: 'Overview', icon: BarChart3 },
-  { href: '/subscriptions', label: 'Stocks', icon: BookMarked },
-  { href: '/polymarket-subscriptions', label: 'Polymarket', icon: TrendingUp },
-  { href: '/markets', label: 'Live Markets', icon: Globe },
-  { href: '/trading', label: 'Trading', icon: LineChart },
-  { href: '/chat', label: 'AI Chat', icon: MessageSquare },
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    label: '',
+    items: [
+      { href: '/dashboard',     label: 'Overview',          icon: LayoutDashboard },
+      { href: '/subscriptions', label: 'My Subscriptions',  icon: BookOpen },
+    ],
+  },
+  {
+    label: 'Browse',
+    items: [
+      { href: '/stocks',      label: 'Stocks & Markets', icon: TrendingUp },
+      { href: '/polymarket',  label: 'Polymarket',       icon: BarChart3  },
+      { href: '/news',        label: 'News Topics',      icon: Newspaper  },
+    ],
+  },
+  {
+    label: 'Tools',
+    items: [
+      { href: '/markets',  label: 'Live Markets', icon: Globe          },
+      { href: '/trading',  label: 'Trading',      icon: LineChart      },
+      { href: '/chat',     label: 'AI Chat',      icon: MessageSquare  },
+    ],
+  },
 ];
 
 const BOTTOM_NAV_ITEMS: NavItem[] = [
@@ -67,24 +91,38 @@ export function AppSidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
-          <NavLink
-            key={href}
-            to={href}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors',
-                'text-[hsl(var(--sidebar-foreground))] hover:bg-[hsl(var(--sidebar-accent))] hover:text-foreground',
-                isActive && 'bg-[hsl(var(--sidebar-accent))] text-foreground font-medium',
-                collapsed && 'justify-center px-2'
-              )
-            }
-            title={collapsed ? label : undefined}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            {!collapsed && <span className="truncate">{label}</span>}
-          </NavLink>
+      <nav className="flex flex-1 flex-col gap-0 overflow-y-auto p-2">
+        {NAV_SECTIONS.map((section, si) => (
+          <div key={si} className={si > 0 ? 'mt-2' : ''}>
+            {section.label && !collapsed && (
+              <p className="mb-1 px-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                {section.label}
+              </p>
+            )}
+            {section.label && collapsed && si > 0 && (
+              <div className="my-2 border-t border-[hsl(var(--sidebar-border))]" />
+            )}
+            <div className="flex flex-col gap-0.5">
+              {section.items.map(({ href, label, icon: Icon }) => (
+                <NavLink
+                  key={href}
+                  to={href}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors',
+                      'text-[hsl(var(--sidebar-foreground))] hover:bg-[hsl(var(--sidebar-accent))] hover:text-foreground',
+                      isActive && 'bg-[hsl(var(--sidebar-accent))] text-foreground font-medium',
+                      collapsed && 'justify-center px-2'
+                    )
+                  }
+                  title={collapsed ? label : undefined}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {!collapsed && <span className="truncate">{label}</span>}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
 
@@ -110,12 +148,7 @@ export function AppSidebar() {
         ))}
 
         {/* User row */}
-        <div
-          className={cn(
-            'mt-1 flex items-center gap-2 rounded-md px-2.5 py-2',
-            collapsed && 'justify-center px-2'
-          )}
-        >
+        <div className={cn('mt-1 flex items-center gap-2 rounded-md px-2.5 py-2', collapsed && 'justify-center px-2')}>
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground">
             {user?.name?.[0] ?? '?'}
           </div>

@@ -11,6 +11,7 @@ import tradingRoutes from './routes/trading.routes';
 import ibRoutes from './routes/ib.routes';
 import subscriptionRoutes from './routes/subscription.routes';
 import polymarketSubscriptionRoutes from './routes/polymarket-subscription.routes';
+import newsSubscriptionRoutes from './routes/news-subscription.routes';
 import { requestLogger, setupLogging } from './logger/pro';
 import { httpRequestDurationSeconds, httpRequestsTotal, normalizeRoutePath, registry } from './observability/metrics';
 
@@ -51,6 +52,7 @@ app.use('/api/trading', tradingRoutes);
 app.use('/api/ib', ibRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/polymarket-subscription', polymarketSubscriptionRoutes);
+app.use('/api/news-subscription', newsSubscriptionRoutes);
 app.use('/api', exampleRoutes);
 
 // Root endpoint

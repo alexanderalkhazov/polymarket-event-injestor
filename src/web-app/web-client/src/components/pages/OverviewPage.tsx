@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, BookMarked, RefreshCcw, TrendingUp, Wifi, WifiOff } from 'lucide-react';
+import { Activity, BarChart3, BookOpen, Newspaper, RefreshCcw, TrendingUp, Wifi, WifiOff } from 'lucide-react';
 import { PageShell } from '@/components/layout/PageShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -121,7 +121,7 @@ export function OverviewPage() {
           title="Subscribed Tickers"
           value={subscribedCount}
           description="Active stock subscriptions"
-          icon={BookMarked}
+          icon={BookOpen}
           accent="success"
         />
         <StatCard
@@ -143,10 +143,11 @@ export function OverviewPage() {
         <h2 className="mb-3 text-sm font-medium text-muted-foreground">Quick actions</h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {[
-            { to: '/subscriptions', label: 'Manage Subscriptions', icon: BookMarked },
-            { to: '/markets', label: 'Browse Markets', icon: TrendingUp },
-            { to: '/trading', label: 'Place Trade', icon: Activity },
-            { to: '/chat', label: 'Ask AI', icon: Activity },
+            { to: '/subscriptions', label: 'My Subscriptions', icon: BookOpen },
+            { to: '/stocks',        label: 'Browse Stocks',    icon: TrendingUp },
+            { to: '/polymarket',    label: 'Polymarket',       icon: BarChart3  },
+            { to: '/news',          label: 'News Topics',      icon: Newspaper  },
+            { to: '/trading',       label: 'Place Trade',      icon: Activity   },
           ].map(({ to, label, icon: Icon }) => (
             <Link
               key={to}

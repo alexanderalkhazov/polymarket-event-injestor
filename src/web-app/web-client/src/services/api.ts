@@ -436,4 +436,37 @@ export const polymarketSubscriptionAPI = {
   },
 };
 
+export interface NewsTopicCategory {
+  category: string;
+  description: string;
+  topics: string[];
+}
+
+export const newsSubscriptionAPI = {
+  getCatalog: async (): Promise<{ success: boolean; data?: NewsTopicCategory[] }> => {
+    const response = await api.get('/api/news-subscription/catalog');
+    return response.data;
+  },
+
+  getMyTopics: async (): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.get('/api/news-subscription');
+    return response.data;
+  },
+
+  addTopic: async (topic: string): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.post(`/api/news-subscription/${encodeURIComponent(topic)}`);
+    return response.data;
+  },
+
+  removeTopic: async (topic: string): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.delete(`/api/news-subscription/${encodeURIComponent(topic)}`);
+    return response.data;
+  },
+
+  setTopics: async (topics: string[]): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.put('/api/news-subscription', { topics });
+    return response.data;
+  },
+};
+
 export default api;
