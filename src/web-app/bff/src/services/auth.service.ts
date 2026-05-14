@@ -1,4 +1,4 @@
-import jwt, { SignOptions } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import User, { IUser } from '../models/user.model';
 import config from '../config';
 
@@ -13,96 +13,118 @@ export interface LoginInput {
   password: string;
 }
 
-export interface AuthResponse {
-  user: {
-    id: string;
-    email: string;
-    name: string;
+export interface UpdateProfileInput {
+  displayName?: string;
+  avatarUrl?: string;
+  timezone?: string;
+  country?: string;
+  bio?: string;
+  tradingProfile?: Partial<IUser['tradingProfile']>;
+  notifications?: Partial<IUser['notifications']>;
+  onboardingComplete?: boolean;
+}
+
+function serializeUser(user: IUser) {
+  return {
+    id: user._id.toString(),
+    email: user.email,
+    name: user.name,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    timezone: user.timezone,
+    country: user.country,
+    bio: user.bio,
+    tier: user.tier,
+    tradingProfile: user.tradingProfile,
+    notifications: user.notifications,
+    onboardingComplete: user.onboardingComplete,
+    lastLoginAt: user.lastLoginAt,
+    createdAt: user.createdAt,
   };
+}
+
+export interface AuthResponse {
+  user: ReturnType<typeof serializeUser>;
   token: string;
 }
 
 class AuthService {
-  // Generate JWT token
   private generateToken(userId: string): string {
     return jwt.sign({ userId }, config.jwt.secret, {
       expiresIn: config.jwt.expiresIn,
     } as any);
   }
 
-  // Register a new user
   async register(input: RegisterInput): Promise<AuthResponse> {
     const { email, password, name } = input;
 
-    // Check if user already exists
     const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      throw new Error('User with this email already exists');
-    }
+    if (existingUser) throw new Error('User with this email already exists');
 
-    // Create new user
-    const user = await User.create({
-      email,
-      password,
-      name,
-    });
-
-    // Generate token
+    const user = await User.create({ email, password, name });
     const token = this.generateToken(user._id.toString());
 
-    return {
-      user: {
-        id: user._id.toString(),
-        email: user.email,
-        name: user.name,
-      },
-      token,
-    };
+    return { user: serializeUser(user), token };
   }
 
-  // Login user
   async login(input: LoginInput): Promise<AuthResponse> {
     const { email, password } = input;
 
-    // Find user by email (include password field)
     const user = await User.findOne({ email }).select('+password');
-    if (!user) {
-      throw new Error('Invalid email or password');
-    }
+    if (!user) throw new Error('Invalid email or password');
 
-    // Check password
     const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) {
-      throw new Error('Invalid email or password');
-    }
+    if (!isPasswordValid) throw new Error('Invalid email or password');
 
-    // Generate token
+    user.lastLoginAt = new Date();
+    await user.save();
+
     const token = this.generateToken(user._id.toString());
-
-    return {
-      user: {
-        id: user._id.toString(),
-        email: user.email,
-        name: user.name,
-      },
-      token,
-    };
+    return { user: serializeUser(user), token };
   }
 
-  // Verify JWT token
   verifyToken(token: string): { userId: string } {
     try {
       const decoded = jwt.verify(token, config.jwt.secret) as { userId: string };
       return decoded;
-    } catch (error) {
+    } catch {
       throw new Error('Invalid or expired token');
     }
   }
 
-  // Get user by ID
   async getUserById(userId: string): Promise<IUser | null> {
     return User.findById(userId);
   }
+
+  async updateProfile(userId: string, input: UpdateProfileInput): Promise<IUser> {
+    const update: Record<string, unknown> = {};
+
+    if (input.displayName !== undefined) update['displayName'] = input.displayName;
+    if (input.avatarUrl !== undefined) update['avatarUrl'] = input.avatarUrl;
+    if (input.timezone !== undefined) update['timezone'] = input.timezone;
+    if (input.country !== undefined) update['country'] = input.country;
+    if (input.bio !== undefined) update['bio'] = input.bio;
+    if (input.onboardingComplete !== undefined) update['onboardingComplete'] = input.onboardingComplete;
+
+    if (input.tradingProfile) {
+      for (const [k, v] of Object.entries(input.tradingProfile)) {
+        update[`tradingProfile.${k}`] = v;
+      }
+    }
+
+    if (input.notifications) {
+      for (const [k, v] of Object.entries(input.notifications)) {
+        update[`notifications.${k}`] = v;
+      }
+    }
+
+    const user = await User.findByIdAndUpdate(userId, { $set: update }, { new: true, runValidators: true });
+    if (!user) throw new Error('User not found');
+    return user;
+  }
+
+  serializeUser = serializeUser;
 }
 
 export default new AuthService();
+

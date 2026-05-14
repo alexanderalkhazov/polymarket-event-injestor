@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,26 +6,42 @@
 
 @layer base {
   :root {
-    --background: 210 33% 7%;
-    --foreground: 200 12% 95%;
-    --card: 210 30% 10%;
-    --card-foreground: 200 12% 95%;
-    --popover: 210 28% 10%;
-    --popover-foreground: 200 12% 95%;
-    --primary: 176 60% 48%;
-    --primary-foreground: 210 40% 8%;
-    --secondary: 218 25% 15%;
-    --secondary-foreground: 200 12% 95%;
-    --muted: 218 20% 18%;
-    --muted-foreground: 210 10% 67%;
-    --accent: 188 58% 17%;
-    --accent-foreground: 179 79% 85%;
-    --destructive: 0 63% 48%;
+    /* cal.com-inspired dark theme */
+    --background: 240 5% 6%;
+    --foreground: 0 0% 95%;
+
+    --card: 240 5% 9%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 240 5% 9%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 176 55% 45%;
+    --primary-foreground: 240 5% 6%;
+
+    --secondary: 240 5% 13%;
+    --secondary-foreground: 0 0% 90%;
+
+    --muted: 240 5% 13%;
+    --muted-foreground: 240 5% 55%;
+
+    --accent: 240 5% 13%;
+    --accent-foreground: 0 0% 95%;
+
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
-    --border: 214 23% 20%;
-    --input: 214 23% 20%;
-    --ring: 176 60% 48%;
-    --radius: 0.8rem;
+
+    --border: 240 5% 16%;
+    --input: 240 5% 13%;
+    --ring: 176 55% 45%;
+
+    --sidebar: 240 5% 7.5%;
+    --sidebar-foreground: 0 0% 85%;
+    --sidebar-border: 240 5% 14%;
+    --sidebar-accent: 240 5% 12%;
+    --sidebar-accent-foreground: 0 0% 95%;
+
+    --radius: 0.625rem;
   }
 
   * {
@@ -34,14 +50,33 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
     min-height: 100vh;
-    background-image:
-      radial-gradient(circle at 0% 0%, rgba(31, 167, 154, 0.14), transparent 40%),
-      radial-gradient(circle at 90% 10%, rgba(94, 132, 255, 0.12), transparent 35%),
-      linear-gradient(135deg, rgba(12, 18, 29, 0.95), rgba(8, 12, 20, 0.95));
   }
 
   #root {
     min-height: 100vh;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
+
+@layer utilities {
+  .sidebar-width {
+    width: 220px;
   }
 }

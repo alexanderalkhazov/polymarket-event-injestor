@@ -75,18 +75,35 @@ class AuthController {
 
       res.status(200).json({
         success: true,
-        data: {
-          id: user._id.toString(),
-          email: user.email,
-          name: user.name,
-          createdAt: user.createdAt,
-        },
+        data: authService.serializeUser(user),
       });
     } catch (error: any) {
       res.status(500).json({
         success: false,
         message: error.message || 'Failed to get user',
       });
+    }
+  }
+
+  async updateProfile(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).userId as string;
+      const { displayName, avatarUrl, timezone, country, bio, tradingProfile, notifications, onboardingComplete } = req.body;
+
+      const user = await authService.updateProfile(userId, {
+        displayName,
+        avatarUrl,
+        timezone,
+        country,
+        bio,
+        tradingProfile,
+        notifications,
+        onboardingComplete,
+      });
+
+      res.status(200).json({ success: true, data: authService.serializeUser(user) });
+    } catch (error: any) {
+      res.status(400).json({ success: false, message: error.message || 'Profile update failed' });
     }
   }
 

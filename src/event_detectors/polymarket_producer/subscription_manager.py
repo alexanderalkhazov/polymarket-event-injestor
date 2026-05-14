@@ -45,11 +45,22 @@ class SubscriptionManager:
         return PolymarketSubscription(**data)
 
     def get_active_subscriptions(self) -> List[PolymarketSubscription]:
-        """Fetch all subscriptions with ref_count > 0 (synchronous)."""
+        """Return one PolymarketSubscription per unique market_id subscribed by any user.
+
+        Reads the BFF user-subscription docs (shape: { userId, marketIds[] }) and
+        aggregates all unique market IDs across all users.
+        """
         try:
-            cursor = self._collection.find({"ref_count": {"$gt": 0}})
-            subs = [self._parse_subscription_doc(doc) for doc in cursor]
-            logger.debug("Found %d active subscriptions", len(subs))
+            cursor = self._collection.find(
+                {"userId": {"$exists": True}, "marketIds": {"$exists": True}},
+                {"marketIds": 1, "_id": 0},
+            )
+            market_ids: set[str] = set()
+            for doc in cursor:
+                market_ids.update(doc.get("marketIds", []))
+
+            subs = [PolymarketSubscription(market_id=mid, ref_count=1) for mid in market_ids]
+            logger.debug("Found %d unique subscribed markets across all users", len(subs))
             return subs
         except Exception as exc:
             logger.error("Error fetching active subscriptions: %s", exc)

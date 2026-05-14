@@ -200,6 +200,20 @@ class IbkrBrokerService {
 
     return { health, accounts, summary, ledger, positions, openOrders };
   }
+
+  /** Search IBKR security definitions by symbol/name across any security type. */
+  async searchSecurities(symbol: string, secType = 'STK'): Promise<IbkrSecDef[]> {
+    const params = new URLSearchParams({ symbol, name: 'true', secType });
+    return this.request<IbkrSecDef[]>(`iserver/secdef/search?${params}`);
+  }
+}
+
+export interface IbkrSecDef {
+  conid: number;
+  symbol: string;
+  description: string;
+  secType?: string;
+  sections?: Array<{ secType: string; exchange?: string }>;
 }
 
 export default new IbkrBrokerService();

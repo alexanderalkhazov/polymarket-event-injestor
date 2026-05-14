@@ -8,6 +8,9 @@ import exampleRoutes from './routes/example.routes';
 import authRoutes from './routes/auth.routes';
 import chatRoutes from './routes/chat.routes';
 import tradingRoutes from './routes/trading.routes';
+import ibRoutes from './routes/ib.routes';
+import subscriptionRoutes from './routes/subscription.routes';
+import polymarketSubscriptionRoutes from './routes/polymarket-subscription.routes';
 import { requestLogger, setupLogging } from './logger/pro';
 import { httpRequestDurationSeconds, httpRequestsTotal, normalizeRoutePath, registry } from './observability/metrics';
 
@@ -45,6 +48,9 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/trading', tradingRoutes);
+app.use('/api/ib', ibRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/polymarket-subscription', polymarketSubscriptionRoutes);
 app.use('/api', exampleRoutes);
 
 // Root endpoint

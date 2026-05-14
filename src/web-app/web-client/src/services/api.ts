@@ -37,10 +37,56 @@ api.interceptors.response.use(
   }
 );
 
+export type RiskTolerance = 'conservative' | 'moderate' | 'aggressive';
+export type ExperienceLevel = 'beginner' | 'intermediate' | 'advanced' | 'professional';
+export type AssetClass = 'stocks' | 'futures' | 'options' | 'crypto' | 'forex' | 'etfs' | 'prediction_markets';
+export type AccountTier = 'free' | 'pro' | 'institutional';
+
+export interface TradingProfile {
+  riskTolerance: RiskTolerance;
+  experienceLevel: ExperienceLevel;
+  preferredAssets: AssetClass[];
+  defaultOrderType: 'MKT' | 'LMT';
+  maxDailyLossUsd: number;
+  maxPositionSizeUsd: number;
+  tradingEnabled: boolean;
+  paperTrading: boolean;
+}
+
+export interface NotificationPreferences {
+  emailAlerts: boolean;
+  signalAlerts: boolean;
+  marketEvents: boolean;
+  dailySummary: boolean;
+  discordWebhook?: string;
+}
+
 export interface User {
   id: string;
   email: string;
   name: string;
+  displayName?: string;
+  avatarUrl?: string;
+  timezone: string;
+  country?: string;
+  bio?: string;
+  tier: AccountTier;
+  tradingProfile: TradingProfile;
+  notifications: NotificationPreferences;
+  onboardingComplete: boolean;
+  lastLoginAt?: string;
+  createdAt: string;
+}
+
+export interface UpdateProfileInput {
+  displayName?: string;
+  avatarUrl?: string;
+  timezone?: string;
+  country?: string;
+  bio?: string;
+  tradingProfile?: Partial<TradingProfile>;
+  notifications?: Partial<NotificationPreferences>;
+  onboardingComplete?: boolean;
 }
 
 export interface AuthResponse {
@@ -77,6 +123,11 @@ export const authAPI = {
 
   getCurrentUser: async (): Promise<{ success: boolean; data?: User }> => {
     const response = await api.get('/api/auth/me');
+    return response.data;
+  },
+
+  updateProfile: async (input: UpdateProfileInput): Promise<{ success: boolean; data?: User }> => {
+    const response = await api.patch('/api/auth/me', input);
     return response.data;
   },
 
@@ -284,6 +335,103 @@ export const tradingAPI = {
 
   getDashboard: async (): Promise<{ success: boolean; data?: any; message?: string }> => {
     const response = await api.get('/api/trading/dashboard');
+    return response.data;
+  },
+};
+
+export interface MarketQuote {
+  symbol: string;
+  name: string;
+  price?: number;
+  change?: number;
+  changePct?: number;
+  volume?: number;
+  marketCap?: number;
+  exchange?: string;
+  type?: string;
+  /** IBKR contract id — present when source is ibkr */
+  conid?: number;
+  secType?: string;
+}
+
+/** Backward-compat alias */
+export type StockInfo = MarketQuote;
+
+export interface RecommendationSection {
+  section: string;
+  items: MarketQuote[];
+}
+
+export interface PolymarketInfo {
+  market_id: string;
+  slug: string;
+}
+
+export const subscriptionAPI = {
+  getUniverse: async (query = '', secType = 'STK'): Promise<{ success: boolean; data?: MarketQuote[]; source?: string }> => {
+    const params = new URLSearchParams({ query, secType });
+    const response = await api.get(`/api/subscription/universe?${params}`);
+    return response.data;
+  },
+
+  getQuotes: async (symbols: string[]): Promise<{ success: boolean; data?: MarketQuote[] }> => {
+    const response = await api.get(`/api/subscription/quotes?symbols=${symbols.join(',')}`);
+    return response.data;
+  },
+
+  getRecommendations: async (): Promise<{
+    success: boolean;
+    data?: RecommendationSection[];
+    profile?: { riskTolerance: string; preferredAssets: string[] };
+  }> => {
+    const response = await api.get('/api/subscription/recommendations');
+    return response.data;
+  },
+
+  getMySubscriptions: async (): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.get('/api/subscription');
+    return response.data;
+  },
+
+  setSubscriptions: async (tickers: string[]): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.put('/api/subscription', { tickers });
+    return response.data;
+  },
+
+  addTicker: async (ticker: string): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.post(`/api/subscription/${encodeURIComponent(ticker)}`);
+    return response.data;
+  },
+
+  removeTicker: async (ticker: string): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.delete(`/api/subscription/${encodeURIComponent(ticker)}`);
+    return response.data;
+  },
+};
+
+export const polymarketSubscriptionAPI = {
+  getUniverse: async (): Promise<{ success: boolean; data?: PolymarketInfo[] }> => {
+    const response = await api.get('/api/polymarket-subscription/universe');
+    return response.data;
+  },
+
+  getMySubscriptions: async (): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.get('/api/polymarket-subscription');
+    return response.data;
+  },
+
+  addMarket: async (marketId: string): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.post(`/api/polymarket-subscription/${encodeURIComponent(marketId)}`);
+    return response.data;
+  },
+
+  removeMarket: async (marketId: string): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.delete(`/api/polymarket-subscription/${encodeURIComponent(marketId)}`);
+    return response.data;
+  },
+
+  setSubscriptions: async (marketIds: string[]): Promise<{ success: boolean; data?: string[] }> => {
+    const response = await api.put('/api/polymarket-subscription', { marketIds });
     return response.data;
   },
 };

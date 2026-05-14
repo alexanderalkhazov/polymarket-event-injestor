@@ -108,26 +108,6 @@ services:
           || echo "WARNING: bucket verification failed"
     restart: "no"
 
-  seed-subscriptions:
-    build: .
-    depends_on:
-      mongo:
-        condition: service_started
-    env_file:
-      - env/seed-subscriptions.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for MongoDB to be ready..."
-        for idx in {1..30}; do
-          nc -zv mongo 27017 && break
-          sleep 1
-        done
-        echo "MongoDB is ready! Running seed script..."
-        python /app/scripts/seed_subscriptions.py
-    restart: "no"
-
   polymarket-event-producer:
     build: .
     depends_on:
@@ -135,8 +115,6 @@ services:
         condition: service_healthy
       mongo:
         condition: service_started
-      seed-subscriptions:
-        condition: service_completed_successfully
     env_file:
       - env/polymarket-producer.env
     entrypoint:
@@ -159,8 +137,6 @@ services:
         condition: service_healthy
       mongo:
         condition: service_started
-      seed-subscriptions:
-        condition: service_completed_successfully
     env_file:
       - env/stock-news-producer.env
     entrypoint:
@@ -183,8 +159,6 @@ services:
         condition: service_healthy
       mongo:
         condition: service_started
-      seed-subscriptions:
-        condition: service_completed_successfully
     env_file:
       - env/stock-analytics-producer.env
     entrypoint:
