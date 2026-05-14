@@ -6,7 +6,6 @@ import { LandingPage } from './components/LandingPage'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AppLayout } from './components/layout/AppLayout'
 import { OverviewPage } from './components/pages/OverviewPage'
-import { MySubscriptionsPage } from './components/pages/MySubscriptionsPage'
 import { SubscriptionsPage } from './components/pages/SubscriptionsPage'
 import { MarketsPage } from './components/pages/MarketsPage'
 import { TradingPage } from './components/pages/TradingPage'
@@ -35,11 +34,9 @@ function App() {
           >
             <Route path="/dashboard" element={<OverviewPage />} />
 
-            {/* Unified subscriptions overview */}
-            <Route path="/subscriptions" element={<MySubscriptionsPage />} />
-
-            {/* Per-source browse pages */}
+            {/* Subscriptions hub (Stocks + Polymarket + News in one page) */}
             <Route path="/stocks" element={<SubscriptionsPage />} />
+            <Route path="/subscriptions" element={<Navigate to="/stocks" replace />} />
             <Route path="/polymarket" element={<PolymarketSubscriptionsPage />} />
             <Route path="/news" element={<NewsBrowsePage />} />
 

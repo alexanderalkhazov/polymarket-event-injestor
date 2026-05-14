@@ -11,7 +11,6 @@ import {
   MessageSquare,
   Newspaper,
   Settings,
-  TrendingUp,
   Zap,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -34,14 +33,13 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: '',
     items: [
-      { href: '/dashboard',     label: 'Overview',          icon: LayoutDashboard },
-      { href: '/subscriptions', label: 'My Subscriptions',  icon: BookOpen },
+      { href: '/dashboard', label: 'Overview',       icon: LayoutDashboard },
+      { href: '/stocks',    label: 'Subscriptions',  icon: BookOpen },
     ],
   },
   {
     label: 'Browse',
     items: [
-      { href: '/stocks',      label: 'Stocks & Markets', icon: TrendingUp },
       { href: '/polymarket',  label: 'Polymarket',       icon: BarChart3  },
       { href: '/news',        label: 'News Topics',      icon: Newspaper  },
     ],

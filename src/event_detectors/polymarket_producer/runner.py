@@ -115,9 +115,13 @@ class PolymarketKafkaRunner:
                     else:
                         logger.info("Processing %d active subscription(s)", len(active_subs))
 
+                        # Targeted fetch: look up only the markets users are subscribed to.
+                        # This avoids the Gamma API pagination limit (100/page) causing most
+                        # subscriptions to be silently unmatched when fetching all markets.
+                        market_ids = [sub.market_id for sub in active_subs]
                         try:
-                            snapshots = await self._data_source.fetch_all_markets_async()
-                            logger.info("Fetched %d market snapshots from Polymarket API", len(snapshots))
+                            snapshots = await self._data_source.fetch_markets_by_ids_async(market_ids)
+                            logger.info("Fetched %d/%d market snapshots by conditionId", len(snapshots), len(market_ids))
                         except Exception as exc:
                             record_error("polymarket-kafka", "fetch_markets")
                             logger.error("Failed to fetch markets from Polymarket API: %s", exc)
@@ -128,6 +132,7 @@ class PolymarketKafkaRunner:
                         for sub in active_subs:
                             snapshot = snapshots.get(sub.market_id)
                             if snapshot is None:
+                                logger.debug("No snapshot for market %s", sub.market_id)
                                 continue
                             matched += 1
                             tasks.append(self._process_subscription(sub, snapshot))

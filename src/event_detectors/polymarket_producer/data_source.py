@@ -238,8 +238,12 @@ class PolymarketClient:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.fetch_market_by_slug, slug)
 
-    def _fetch_page(self, offset: int, limit: int = 500) -> List[Dict[str, Any]]:
-        """Fetch a single page of markets from the Gamma API."""
+    def _fetch_page(self, offset: int, limit: int = 100) -> List[Dict[str, Any]]:
+        """Fetch a single page of markets from the Gamma API.
+
+        Note: The Gamma API caps pages at 100 items regardless of the limit parameter.
+        We use limit=100 explicitly to match the actual API behaviour.
+        """
         response = self._request_with_retries(
             "GET",
             "/markets",
@@ -258,15 +262,68 @@ class PolymarketClient:
             )
         return data
 
+    def fetch_market_by_id(self, market_id: str) -> Optional[MarketSnapshot]:
+        """Fetch a single market by its conditionId from the Gamma API.
+
+        Returns None if the market cannot be found or parsed.
+        """
+        try:
+            response = self._request_with_retries(
+                "GET", "/markets", params={"conditionId": market_id}
+            )
+        except PolymarketApiError as exc:
+            logger.warning("Failed to fetch market by id '%s': %s", market_id, exc)
+            return None
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning("Non-JSON response for conditionId '%s'", market_id)
+            return None
+
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
+        if isinstance(data, list) and len(data) > 0:
+            return self._parse_gamma_market(data[0])
+        if isinstance(data, dict):
+            return self._parse_gamma_market(data)
+
+        logger.debug("Empty response for conditionId '%s'", market_id)
+        return None
+
+    def fetch_markets_by_ids(self, market_ids: List[str]) -> Dict[str, MarketSnapshot]:
+        """Fetch specific markets by conditionId. More efficient than fetching all
+        markets when only a subset is needed (avoids pagination over thousands of markets).
+
+        Returns a dict keyed by market_id. Missing/unparseable markets are silently skipped.
+        """
+        result: Dict[str, MarketSnapshot] = {}
+        for mid in market_ids:
+            try:
+                snapshot = self.fetch_market_by_id(mid)
+                if snapshot is not None:
+                    result[mid] = snapshot
+            except Exception as exc:
+                logger.warning("Error fetching market %s: %s", mid, exc)
+        logger.info("Fetched %d/%d markets by conditionId", len(result), len(market_ids))
+        return result
+
+    async def fetch_markets_by_ids_async(self, market_ids: List[str]) -> Dict[str, MarketSnapshot]:
+        """Async wrapper around fetch_markets_by_ids."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.fetch_markets_by_ids, market_ids)
+
     def fetch_all_markets(self) -> Dict[str, MarketSnapshot]:
         """Fetch all active markets from the Polymarket API, paginating automatically.
 
         Returns a dict keyed by condition_id.
+        Note: The Gamma API caps pages at 100 items. We paginate until a page
+        returns fewer than 100 items (the last page).
         """
-        page_size = 500
+        page_size = 100  # Gamma API hard cap per page
         all_items: List[Dict[str, Any]] = []
 
-        for offset in range(0, 10_000, page_size):
+        for offset in range(0, 100_000, page_size):
             page = self._fetch_page(offset, page_size)
             all_items.extend(page)
             logger.debug("Fetched page offset=%d, got %d markets (total %d)", offset, len(page), len(all_items))

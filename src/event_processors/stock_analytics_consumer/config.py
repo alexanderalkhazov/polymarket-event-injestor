@@ -35,6 +35,7 @@ class CouchbaseConfig:
 class AppConfig:
     kafka: KafkaConfig
     couchbase: CouchbaseConfig
+    mongo_uri: str = "mongodb://mongo:27017"
     environment: str = "dev"
     poll_interval_ms: int = 1000  # Poll interval in milliseconds
     log_full_events: bool = False
@@ -98,6 +99,7 @@ def load_config() -> AppConfig:
     return AppConfig(
         kafka=kafka,
         couchbase=couchbase,
+        mongo_uri=_get_env("MONGO_URI", "mongodb://mongo:27017"),
         environment=_get_env("ENVIRONMENT", "dev"),
         poll_interval_ms=int(_get_env("POLL_INTERVAL_MS", "1000")),
         log_full_events=_get_env("LOG_FULL_EVENTS", "false").lower() in {"1", "true", "yes", "on"},

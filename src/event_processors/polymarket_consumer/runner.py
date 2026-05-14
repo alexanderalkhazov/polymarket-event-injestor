@@ -7,6 +7,7 @@ from collections import deque
 from .config import AppConfig
 from .couchbase_client import CouchbaseClient
 from .kafka_consumer import KafkaConsumer
+from event_processors.subscription_fan_out import SubscriptionFanOut
 from observability.metrics import cycle_timer, record_consumed_event, record_error, record_skipped_event
 
 logger = logging.getLogger(__name__)
@@ -26,10 +27,11 @@ class StrategyInjestorRunner:
     4. In production: events would be routed to trading strategy evaluators
     """
 
-    def __init__(self, config: AppConfig, kafka_consumer: KafkaConsumer, couchbase_client: CouchbaseClient) -> None:
+    def __init__(self, config: AppConfig, kafka_consumer: KafkaConsumer, couchbase_client: CouchbaseClient, fan_out: SubscriptionFanOut) -> None:
         self._config = config
         self._kafka_consumer = kafka_consumer
         self._couchbase = couchbase_client
+        self._fan_out = fan_out
         self._stop_requested = False
         self._polls_since_last_event = 0
         self._processed_event_ids: set[str] = set()
@@ -145,7 +147,23 @@ class StrategyInjestorRunner:
                             logger.info("EVENT RECEIVED: pipeline=%s event_id=%s", pipeline, event.get("event_id"))
 
                         try:
-                            self._couchbase.upsert_event(event)
+                            # Fan-out: find all users subscribed to this signal
+                            if pipeline == "polymarket":
+                                user_ids = await self._fan_out.users_for_market(event.get("market_id", ""))
+                            else:
+                                user_ids = await self._fan_out.users_for_ticker(event.get("ticker", ""))
+
+                            if user_ids:
+                                for uid in user_ids:
+                                    self._couchbase.upsert_event(event, user_id=uid)
+                                logger.info(
+                                    "Fan-out %s event %s → %d user(s)",
+                                    pipeline, event.get("event_id", "")[:12], len(user_ids),
+                                )
+                            else:
+                                # No subscribers — store as _global so data isn't lost
+                                self._couchbase.upsert_event(event, user_id="_global")
+                                logger.debug("No subscribers for event %s; stored as _global", event.get("event_id", "")[:12])
                         except Exception as cb_exc:
                             record_error("strategy-injestor", "couchbase_upsert")
                             logger.error("Failed to persist event to Couchbase: %s", cb_exc)
@@ -159,6 +177,7 @@ class StrategyInjestorRunner:
                         continue
 
         finally:
-            logger.info("Runner stopping; closing Kafka consumer and Couchbase")
+            logger.info("Runner stopping; closing Kafka consumer, Couchbase, and fan-out")
             self._kafka_consumer.close()
             self._couchbase.close()
+            await self._fan_out.close()

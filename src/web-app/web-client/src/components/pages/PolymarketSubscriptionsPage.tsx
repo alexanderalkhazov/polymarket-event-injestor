@@ -145,7 +145,7 @@ export function PolymarketSubscriptionsPage() {
                   className="flex items-center justify-between px-6 py-3 text-sm transition-colors hover:bg-accent/50"
                 >
                   <div className="min-w-0 flex-1 pr-4">
-                    <p className="truncate font-medium" title={m.slug}>{m.slug || '—'}</p>
+                    <p className="truncate font-medium" title={m.question}>{m.slug || '—'}</p>
                     <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                       {m.market_id}
                     </p>

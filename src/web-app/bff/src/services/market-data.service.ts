@@ -5,6 +5,7 @@
 
 const YF1 = 'https://query1.finance.yahoo.com';
 const YF2 = 'https://query2.finance.yahoo.com';
+const CG_BASE = 'https://api.coingecko.com/api/v3';
 const TIMEOUT_MS = 8_000;
 
 const YF_HEADERS: Record<string, string> = {
@@ -28,6 +29,9 @@ async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Prom
   _cache.set(key, { data, exp: Date.now() + ttlMs });
   return data;
 }
+
+// Yahoo Finance session crumb (required for ^-prefix index quotes since ~2024)
+let _crumbCache: { crumb: string; cookie: string; exp: number } | null = null;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -72,10 +76,34 @@ const RISK_SCREENERS: Record<string, [string, string]> = {
 
 // Default symbols by asset class when no search query
 const ASSET_DEFAULTS: Record<string, string[]> = {
-  crypto:  ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD', 'ADA-USD', 'AVAX-USD'],
-  futures: ['ES=F', 'NQ=F', 'YM=F', 'RTY=F', 'CL=F', 'GC=F', 'SI=F', 'ZB=F', 'ZN=F', 'NG=F'],
-  etfs:    ['SPY', 'QQQ', 'IWM', 'EFA', 'AGG', 'GLD', 'VTI', 'ARKK', 'XLF', 'XLK'],
-  forex:   ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'USDCHF=X', 'AUDUSD=X', 'USDCAD=X', 'NZDUSD=X'],
+  crypto:  [
+    'BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD',
+    'ADA-USD', 'AVAX-USD', 'TRX-USD', 'LINK-USD', 'TON-USD', 'SHIB-USD',
+    'DOT-USD', 'MATIC-USD', 'LTC-USD', 'UNI-USD', 'ATOM-USD', 'XLM-USD',
+    'BCH-USD', 'NEAR-USD', 'APT-USD', 'OP-USD', 'ARB-USD', 'FIL-USD', 'SUI-USD',
+  ],
+  futures: [
+    'ES=F', 'NQ=F', 'YM=F', 'RTY=F', 'CL=F', 'GC=F', 'SI=F',
+    'ZB=F', 'ZN=F', 'NG=F', 'HG=F', 'PL=F', 'ZC=F', 'ZW=F', 'ZS=F',
+    'LE=F', 'HE=F', 'GF=F', 'CC=F', 'KC=F', 'CT=F', 'SB=F', 'PA=F',
+  ],
+  etfs:    [
+    'SPY', 'QQQ', 'IWM', 'EFA', 'AGG', 'GLD', 'VTI', 'ARKK',
+    'XLF', 'XLK', 'XLE', 'XLV', 'XLI', 'XLB', 'XLP', 'XLU',
+    'VNQ', 'LQD', 'HYG', 'TLT', 'BND', 'VWO', 'DIA', 'IAU', 'SLV',
+  ],
+  forex:   [
+    'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'USDCHF=X', 'AUDUSD=X',
+    'USDCAD=X', 'NZDUSD=X', 'USDCNH=X', 'USDSEK=X', 'USDHKD=X',
+    'USDSGD=X', 'USDMXN=X', 'USDINR=X', 'USDBRL=X', 'USDKRW=X',
+    'EURGBP=X', 'EURJPY=X', 'GBPJPY=X', 'AUDJPY=X', 'CADJPY=X',
+  ],
+  indices: [
+    '^GSPC', '^NDX', '^DJI', '^RUT', '^VIX', '^FTSE', '^N225', '^HSI',
+    '^GDAXI', '^FCHI', '^STOXX50E', '^AXJO', '^BSESN', '^NSEI',
+    '^KS11', '^TWII', '^STI', '^MXX', '^BOVESPA', '^TA125.TA',
+    '^NYA', '^XAX', '^BUK100P', '^N100', '^IBEX',
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -106,6 +134,93 @@ class MarketDataService {
     });
     if (!res.ok) throw new Error(`Yahoo Finance HTTP ${res.status}`);
     return res.json() as Promise<T>;
+  }
+
+  private async genericFetch<T>(url: string): Promise<T> {
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; TradingDashboard/1.0)' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json() as Promise<T>;
+  }
+
+  /**
+   * Obtain a Yahoo Finance session crumb (needed for index quotes).
+   * Result cached for 50 minutes; re-fetched automatically when expired.
+   */
+  private async ensureCrumb(): Promise<{ crumb: string; cookie: string }> {
+    if (_crumbCache && _crumbCache.exp > Date.now()) {
+      return { crumb: _crumbCache.crumb, cookie: _crumbCache.cookie };
+    }
+    const baseHeaders = { ...YF_HEADERS };
+    // 1. Hit fc.yahoo.com to obtain a session cookie
+    const cookieRes = await fetch('https://fc.yahoo.com', {
+      headers: baseHeaders,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const rawCookie = (cookieRes.headers.get('set-cookie') ?? '').split(';')[0];
+    // 2. Exchange cookie for crumb
+    const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { ...baseHeaders, Cookie: rawCookie },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!crumbRes.ok) throw new Error(`Crumb fetch HTTP ${crumbRes.status}`);
+    const crumb = await crumbRes.text();
+    _crumbCache = { crumb, cookie: rawCookie, exp: Date.now() + 50 * 60 * 1000 };
+    return { crumb, cookie: rawCookie };
+  }
+
+  /** Quotes for index symbols (^ prefix) that require Yahoo Finance crumb auth */
+  private async getIndexQuotes(symbols: string[]): Promise<MarketQuote[]> {
+    if (!symbols.length) return [];
+    const { crumb, cookie } = await this.ensureCrumb();
+    // Batch in groups of 10 to stay well within URL limits, run in parallel
+    const chunks: string[][] = [];
+    for (let i = 0; i < symbols.length; i += 10) chunks.push(symbols.slice(i, i + 10));
+    const settled = await Promise.allSettled(
+      chunks.map(async (chunk) => {
+        const url = `${YF1}/v7/finance/quote?symbols=${encodeURIComponent(chunk.join(','))}&crumb=${encodeURIComponent(crumb)}`;
+        const res = await fetch(url, {
+          headers: { ...YF_HEADERS, Cookie: cookie },
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error(`YF HTTP ${res.status}`);
+        const data = await res.json() as { quoteResponse?: { result?: Record<string, unknown>[] } };
+        return (data.quoteResponse?.result ?? []).map(mapQuote);
+      }),
+    );
+    return settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+  }
+
+  /**
+   * CoinGecko — top-N cryptocurrencies by market cap with live prices.
+   * Free public endpoint, no API key required. Cached 60 s to respect rate limits.
+   */
+  private async getCryptoMarkets(count = 50): Promise<MarketQuote[]> {
+    return cached(`cg:markets:${count}`, 60_000, async () => {
+      const url = `${CG_BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${count}&page=1&sparkline=false`;
+      const coins = await this.genericFetch<Array<{
+        symbol: string;
+        name: string;
+        current_price: number | null;
+        price_change_24h: number | null;
+        price_change_percentage_24h: number | null;
+        total_volume: number | null;
+        market_cap: number | null;
+      }>>(url);
+      return (coins ?? []).map((c) => ({
+        symbol:    `${c.symbol.toUpperCase()}-USD`,
+        name:      c.name,
+        price:     c.current_price     ?? undefined,
+        change:    c.price_change_24h  ?? undefined,
+        changePct: c.price_change_percentage_24h ?? undefined,
+        volume:    c.total_volume      ?? undefined,
+        marketCap: c.market_cap        ?? undefined,
+        exchange:  'Crypto',
+        type:      'CRYPTOCURRENCY',
+      }));
+    });
   }
 
   /** Symbol search — returns names + exchange (no prices), optionally filtered by secType */
@@ -139,16 +254,49 @@ class MarketDataService {
     });
   }
 
-  /** Batch real-time quotes — max 50 symbols */
+  /** Batch real-time quotes — max 50 symbols.
+   *  Tries crumb-authenticated requests first (required by Yahoo Finance in
+   *  server/Docker environments), then falls back to unauthenticated. */
   async getQuotes(symbols: string[]): Promise<MarketQuote[]> {
     if (!symbols.length) return [];
     const uniq = [...new Set(symbols)].slice(0, 50);
     return cached(`quotes:${uniq.sort().join(',')}`, 15_000, async () => {
-      const url = `${YF2}/v7/finance/quote?symbols=${encodeURIComponent(uniq.join(','))}`;
-      const data = await this.yfFetch<{
-        quoteResponse?: { result?: Record<string, unknown>[] };
-      }>(url);
-      return (data.quoteResponse?.result ?? []).map(mapQuote);
+      // ── Strategy 1: crumb-authenticated (works from Docker / server envs) ──
+      try {
+        const { crumb, cookie } = await this.ensureCrumb();
+        // Split into chunks of 20 to stay within safe URL limits
+        const chunks: string[][] = [];
+        for (let i = 0; i < uniq.length; i += 20) chunks.push(uniq.slice(i, i + 20));
+        const settled = await Promise.allSettled(
+          chunks.map(async (chunk) => {
+            const syms = encodeURIComponent(chunk.join(','));
+            const url = `${YF1}/v7/finance/quote?symbols=${syms}&crumb=${encodeURIComponent(crumb)}`;
+            const res = await fetch(url, {
+              headers: { ...YF_HEADERS, Cookie: cookie },
+              signal: AbortSignal.timeout(TIMEOUT_MS),
+            });
+            if (!res.ok) throw new Error(`YF HTTP ${res.status}`);
+            const data = await res.json() as { quoteResponse?: { result?: Record<string, unknown>[] } };
+            return (data.quoteResponse?.result ?? []).map(mapQuote);
+          }),
+        );
+        const results = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+        if (results.length) return results;
+      } catch { /* crumb unavailable — fall through */ }
+
+      // ── Strategy 2: unauthenticated (works locally / some cloud envs) ──────
+      const syms = encodeURIComponent(uniq.join(','));
+      const tryFetch = async (base: string) => {
+        const data = await this.yfFetch<{
+          quoteResponse?: { result?: Record<string, unknown>[] };
+        }>(`${base}/v7/finance/quote?symbols=${syms}`);
+        return (data.quoteResponse?.result ?? []).map(mapQuote);
+      };
+      try {
+        const results = await tryFetch(YF2);
+        if (results.length) return results;
+      } catch { /* fall through */ }
+      return tryFetch(YF1);
     });
   }
 
@@ -165,12 +313,39 @@ class MarketDataService {
 
   /** Default live symbols to display for a given instrument type with no search query */
   async getDefaultsForSecType(secType: string): Promise<MarketQuote[]> {
-    switch (secType.toUpperCase()) {
-      case 'FUT':    return this.getQuotes(ASSET_DEFAULTS.futures).catch(() => []);
-      case 'CRYPTO': return this.getQuotes(ASSET_DEFAULTS.crypto).catch(() => []);
-      case 'ETF':    return this.getQuotes(ASSET_DEFAULTS.etfs).catch(() => []);
-      case 'FOREX':  return this.getQuotes(ASSET_DEFAULTS.forex).catch(() => []);
-      case 'IND':    return this.getQuotes(['^GSPC', '^NDX', '^DJI', '^RUT', '^VIX', '^FTSE', '^N225', '^HSI']).catch(() => []);
+    const key = secType.toUpperCase();
+
+    // Search-based fallback terms when getQuotes returns nothing
+    const SEARCH_FALLBACK: Record<string, string> = {
+      FUT:    'E-mini futures',
+      CRYPTO: 'bitcoin',
+      ETF:    'S&P ETF',
+      FOREX:  'currency exchange',
+      IND:    'market index',
+    };
+
+    const withSearchFallback = async (quotes: () => Promise<MarketQuote[]>): Promise<MarketQuote[]> => {
+      const results = await quotes().catch(() => []);
+      if (results.length) return results;
+      const term = SEARCH_FALLBACK[key];
+      return term ? this.search(term, 20, key).catch(() => []) : [];
+    };
+
+    switch (key) {
+      case 'FUT':    return withSearchFallback(() => this.getQuotes(ASSET_DEFAULTS.futures));
+      case 'CRYPTO': {
+        const coins = await this.getCryptoMarkets(50).catch(() => []);
+        if (coins.length) return coins;
+        return withSearchFallback(() => this.getQuotes(ASSET_DEFAULTS.crypto));
+      }
+      case 'ETF':    return withSearchFallback(() => this.getQuotes(ASSET_DEFAULTS.etfs));
+      case 'FOREX':  return withSearchFallback(() => this.getQuotes(ASSET_DEFAULTS.forex));
+      case 'IND': {
+        // Indices require Yahoo Finance crumb auth (^ prefix symbols)
+        const coins = await this.getIndexQuotes(ASSET_DEFAULTS.indices).catch(() => []);
+        if (coins.length) return coins;
+        return withSearchFallback(() => Promise.resolve([]));
+      }
       case 'STK':    return this.getScreener('most_actives', 30).catch(() => []);
       default:       return [];
     }
@@ -210,10 +385,11 @@ class MarketDataService {
       if (items.length) out.push({ section: 'Popular ETFs', items });
     }
 
-    // ---- Crypto -------------------------------------------------------------
+    // ---- Crypto (live from CoinGecko — top by market cap) ------------------
     if (assets.includes('crypto') || assets.includes('prediction_markets')) {
-      const items = await this.getQuotes(ASSET_DEFAULTS.crypto).catch(() => []);
-      if (items.length) out.push({ section: 'Crypto', items });
+      const items = await this.getCryptoMarkets(25)
+        .catch(() => this.getQuotes(ASSET_DEFAULTS.crypto).catch(() => []));
+      if (items.length) out.push({ section: 'Top Crypto by Market Cap', items });
     }
 
     // ---- Futures ------------------------------------------------------------

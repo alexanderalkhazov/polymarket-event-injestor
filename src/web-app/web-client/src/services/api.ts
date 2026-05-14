@@ -365,6 +365,11 @@ export interface RecommendationSection {
 export interface PolymarketInfo {
   market_id: string;
   slug: string;
+  question?: string;
+  volume?: string;
+  endDate?: string;
+  /** Yes/No probabilities, e.g. [0.65, 0.35] */
+  outcomePrices?: number[];
 }
 
 export const subscriptionAPI = {

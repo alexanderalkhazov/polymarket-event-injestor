@@ -46,8 +46,26 @@ class SubscriptionManager:
             logger.warning("Unsubscribe no-op for %s", ticker)
 
     async def get_active_subscriptions_async(self) -> List[StockAnalyticsSubscription]:
-        docs = await self._collection.find({"ref_count": {"$gt": 0}}).to_list(length=None)
-        return [StockAnalyticsSubscription(**doc) for doc in docs]
+        """Return one StockAnalyticsSubscription per unique ticker subscribed by any user.
+
+        Reads BFF user-subscription docs (shape: { userId, tickers[] }) and
+        aggregates unique tickers across all users.
+        """
+        try:
+            cursor = self._collection.find(
+                {"userId": {"$exists": True}, "tickers": {"$exists": True}},
+                {"tickers": 1, "_id": 0},
+            )
+            docs = await cursor.to_list(length=None)
+            tickers: set[str] = set()
+            for doc in docs:
+                tickers.update(doc.get("tickers", []))
+            subs = [StockAnalyticsSubscription(ticker=t, ref_count=1) for t in tickers]
+            logger.debug("Found %d unique subscribed tickers across all users", len(subs))
+            return subs
+        except Exception as exc:
+            logger.error("Error fetching active subscriptions: %s", exc)
+            return []
 
     async def close(self) -> None:
         self._client.close()

@@ -9,6 +9,15 @@ export interface MarketDoc {
   volume?: string;
   endDate?: string;
   active?: boolean;
+  outcomePrices?: number[];
+}
+
+function safeParseNumberArray(val: unknown): number[] {
+  try {
+    const arr = JSON.parse(String(val ?? '[]'));
+    if (Array.isArray(arr)) return arr.map(Number).filter((n) => !isNaN(n));
+  } catch { /* ignore */ }
+  return [];
 }
 
 /** Fetch the live Polymarket market universe from the public Gamma API. */
@@ -24,6 +33,7 @@ async function fetchLiveUniverse(limit = 100): Promise<MarketDoc[]> {
     volume: String(m.volume || ''),
     endDate: String(m.endDateIso || m.endDate || ''),
     active: Boolean(m.active ?? true),
+    outcomePrices: safeParseNumberArray(m.outcomePrices),
   }));
 }
 

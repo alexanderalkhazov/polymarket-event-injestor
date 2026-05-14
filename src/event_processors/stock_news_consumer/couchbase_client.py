@@ -82,12 +82,15 @@ class CouchbaseClient:
             return
         collection.upsert(key, body)
 
-    def upsert_event(self, event: Dict[str, Any]) -> None:
+    def upsert_event(self, event: Dict[str, Any], user_id: str = "_global") -> None:
         """Persist an event into the appropriate named collection.
 
-        Two documents are written per event:
-        1. Latest-state document (overwritten each time) — short key per entity
-        2. Immutable history record — keyed by event_id
+        Document key scheme (per-user):
+          latest::{user_id}::{entity}        — mutable latest-state doc (overwritten)
+          event::{user_id}::{event_id}       — immutable history record
+
+        When user_id is "_global" the event was not matched to any subscriber and
+        is stored as a fallback with no per-user fanout.
         """
         pipeline = event.get("pipeline", "polymarket")
         event_id = event.get("event_id", "unknown")
@@ -96,22 +99,24 @@ class CouchbaseClient:
 
         if pipeline == "stock-news":
             ticker = event.get("ticker", "unknown")
-            state_key = f"latest::{ticker}"
+            state_key = f"latest::{user_id}::{ticker}"
         elif pipeline == "stock-analytics":
             ticker = event.get("ticker", "unknown")
             signal_type = event.get("signal_type", "unknown")
-            state_key = f"latest::{ticker}::{signal_type}"
+            state_key = f"latest::{user_id}::{ticker}::{signal_type}"
         else:
             market_id = event.get("market_id", "unknown")
-            state_key = f"latest::{market_id}"
+            state_key = f"latest::{user_id}::{market_id}"
 
-        self._upsert_with_ttl(collection, state_key, {"type": f"{pipeline}_latest", **event}, ttl_seconds)
-        self._upsert_with_ttl(collection, f"event::{event_id}", {"type": f"{pipeline}_event", **event}, ttl_seconds)
+        doc_base = {"user_id": user_id, **event}
+        self._upsert_with_ttl(collection, state_key, {"type": f"{pipeline}_latest", **doc_base}, ttl_seconds)
+        self._upsert_with_ttl(collection, f"event::{user_id}::{event_id}", {"type": f"{pipeline}_event", **doc_base}, ttl_seconds)
 
-        logger.info(
-            "Persisted %s event %s → collection=%s key=%s",
+        logger.debug(
+            "Persisted %s event %s → user=%s collection=%s key=%s",
             pipeline,
             event_id[:12],
+            user_id,
             collection.name,
             state_key,
         )
