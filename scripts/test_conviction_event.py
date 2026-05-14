@@ -9,14 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Add src to path so we can import modules
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from polymarket_kafka.config import load_config
-from polymarket_kafka.data_source import MarketSnapshot
-from polymarket_kafka.models import PolymarketSubscription
-from polymarket_kafka.conviction import ConvictionState, detect_conviction_change
-from polymarket_kafka.event_builder import build_polymarket_event
-from polymarket_kafka.kafka_client import KafkaClient
+from event_detectors.polymarket_kafka.config import load_config
+from event_detectors.polymarket_kafka.data_source import MarketSnapshot
+from event_detectors.polymarket_kafka.models import PolymarketSubscription
+from event_detectors.polymarket_kafka.conviction import ConvictionState, detect_conviction_change
+from event_detectors.polymarket_kafka.event_builder import build_polymarket_event
+from event_detectors.polymarket_kafka.kafka_client import KafkaClient
 
 
 def test_conviction_event():

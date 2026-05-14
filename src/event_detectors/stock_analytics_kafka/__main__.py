@@ -1,7 +1,7 @@
 """Entry point for the stock-analytics-kafka service.
 
 Usage:
-    python -m stock_analytics_kafka
+    python -m event_detectors.stock_analytics_kafka
 """
 from __future__ import annotations
 

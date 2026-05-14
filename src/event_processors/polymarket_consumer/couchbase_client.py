@@ -7,6 +7,7 @@ from typing import Any, Dict
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster, ClusterOptions
 from couchbase.collection import Collection
+from couchbase.options import UpsertOptions
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,22 @@ class CouchbaseClient:
       stock_analytics  — Pipeline 3 sharp analytics signals
     """
 
-    def __init__(self, connection_string: str, username: str, password: str, bucket_name: str) -> None:
+    def __init__(
+        self,
+        connection_string: str,
+        username: str,
+        password: str,
+        bucket_name: str,
+        polymarket_ttl_seconds: int = 0,
+        stock_news_ttl_seconds: int = 0,
+        stock_analytics_ttl_seconds: int = 0,
+    ) -> None:
         self._bucket_name = bucket_name
+        self._collection_ttls_seconds: Dict[str, int] = {
+            "polymarket": max(0, polymarket_ttl_seconds),
+            "stock-news": max(0, stock_news_ttl_seconds),
+            "stock-analytics": max(0, stock_analytics_ttl_seconds),
+        }
 
         logger.info("Connecting to Couchbase at %s bucket=%s", connection_string, bucket_name)
         auth = PasswordAuthenticator(username, password)
@@ -47,6 +62,12 @@ class CouchbaseClient:
             _COLLECTION_STOCK_NEWS,
             _COLLECTION_STOCK_ANALYTICS,
         )
+        logger.info(
+            "Collection TTLs configured (seconds): polymarket=%d stock-news=%d stock-analytics=%d",
+            self._collection_ttls_seconds["polymarket"],
+            self._collection_ttls_seconds["stock-news"],
+            self._collection_ttls_seconds["stock-analytics"],
+        )
 
     def _route_collection(self, pipeline: str) -> Collection:
         if pipeline == "stock-news":
@@ -54,6 +75,12 @@ class CouchbaseClient:
         if pipeline == "stock-analytics":
             return self._col_stock_analytics
         return self._col_polymarket
+
+    def _upsert_with_ttl(self, collection: Collection, key: str, body: Dict[str, Any], ttl_seconds: int) -> None:
+        if ttl_seconds > 0:
+            collection.upsert(key, body, UpsertOptions(expiry=timedelta(seconds=ttl_seconds)))
+            return
+        collection.upsert(key, body)
 
     def upsert_event(self, event: Dict[str, Any]) -> None:
         """Persist an event into the appropriate named collection.
@@ -65,6 +92,7 @@ class CouchbaseClient:
         pipeline = event.get("pipeline", "polymarket")
         event_id = event.get("event_id", "unknown")
         collection = self._route_collection(pipeline)
+        ttl_seconds = self._collection_ttls_seconds.get(pipeline, 0)
 
         if pipeline == "stock-news":
             ticker = event.get("ticker", "unknown")
@@ -77,8 +105,8 @@ class CouchbaseClient:
             market_id = event.get("market_id", "unknown")
             state_key = f"latest::{market_id}"
 
-        collection.upsert(state_key, {"type": f"{pipeline}_latest", **event})
-        collection.upsert(f"event::{event_id}", {"type": f"{pipeline}_event", **event})
+        self._upsert_with_ttl(collection, state_key, {"type": f"{pipeline}_latest", **event}, ttl_seconds)
+        self._upsert_with_ttl(collection, f"event::{event_id}", {"type": f"{pipeline}_event", **event}, ttl_seconds)
 
         logger.info(
             "Persisted %s event %s → collection=%s key=%s",

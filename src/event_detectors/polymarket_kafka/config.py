@@ -49,7 +49,7 @@ class AppConfig:
 def _load_dotenv() -> None:
     """Load environment variables from a .env file if present."""
     # Load from default .env in project root, if it exists.
-    project_root = Path(__file__).resolve().parents[2]
+    project_root = Path(__file__).resolve().parents[3]
     dotenv_path = project_root / ".env"
     if dotenv_path.exists():
         load_dotenv(dotenv_path)

@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     """Main entry point."""
-    setup_logging(service_name=os.getenv("SERVICE_NAME", "strategy-injestor"))
-    logger.info("Starting strategy-injestor service...")
-    start_metrics_server("strategy-injestor", 9104)
+    setup_logging(service_name=os.getenv("SERVICE_NAME", "stock-news-consumer"))
+    logger.info("Starting stock-news-consumer service...")
+    start_metrics_server("stock-news-consumer", 9104)
     logger.info("Loading configuration...")
     config = load_config()
 
@@ -29,6 +29,9 @@ async def main() -> None:
         username=config.couchbase.username,
         password=config.couchbase.password,
         bucket_name=config.couchbase.bucket,
+        polymarket_ttl_seconds=config.couchbase.polymarket_ttl_seconds,
+        stock_news_ttl_seconds=config.couchbase.stock_news_ttl_seconds,
+        stock_analytics_ttl_seconds=config.couchbase.stock_analytics_ttl_seconds,
     )
 
     runner = StrategyInjestorRunner(config, kafka_consumer, couchbase_client)

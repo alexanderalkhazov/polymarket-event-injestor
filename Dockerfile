@@ -17,4 +17,4 @@ RUN pip install --upgrade pip && \
     pip install . && \
     pip install debugpy
 
-CMD ["python", "-m", "polymarket_kafka"]
+CMD ["python", "-m", "event_detectors.polymarket_kafka"]
