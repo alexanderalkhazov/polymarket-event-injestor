@@ -12,8 +12,8 @@ dependencies = [
     # Redis
     "redis>=5.0",
     # AI
-    "anthropic>=0.25",
     "openai>=1.30",
+    "sentence-transformers>=2.7",
     # Data sources
     "yfinance>=0.2.40",
     "requests>=2.32.0",
@@ -21,7 +21,7 @@ dependencies = [
     "fredapi>=0.5",
     # Data processing
     "pandas>=2.2",
-    "pandas-ta>=0.3",
+    "ta>=0.11",
     "vectorbt>=0.26",
     "numpy>=1.26",
     # Schema / config

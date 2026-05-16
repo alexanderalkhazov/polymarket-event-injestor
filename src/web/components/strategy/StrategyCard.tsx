@@ -31,14 +31,13 @@ export function StrategyCard({ strategy: s, selected, onClick }: StrategyCardPro
     <div
       onClick={onClick}
       style={{
-        background: "var(--bg1)",
+        background: selected ? "var(--bg2)" : "var(--bg1)",
         border: `1px solid ${selected ? accentColor : "var(--border)"}`,
         borderTop: `2px solid ${accentColor}`,
         borderRadius: 10, padding: "14px", cursor: isDropped ? "default" : "pointer",
         opacity: isDropped ? 0.45 : 1,
         transition: "border-color 0.1s, background 0.1s",
-        background: selected ? "var(--bg2)" : "var(--bg1)",
-      } as React.CSSProperties}
+      }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <ActionBadge action={s.action} />

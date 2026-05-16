@@ -36,8 +36,9 @@ export async function POST(req: Request) {
   const equity = parseFloat(account.equity)
   const sizing = strat.sizing_usd ?? equity * strat.sizing_pct
   const symbol = strat.tickers[0]
-  const quote = await alpaca.getLatestQuote(symbol)
-  const price = parseFloat(quote.ap)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const quote = await alpaca.getLatestQuote(symbol) as any
+  const price = parseFloat(quote.ap ?? quote.AskPrice ?? quote.ask_price ?? "0")
   const qty = Math.floor(sizing / price)
 
   if (qty < 1)

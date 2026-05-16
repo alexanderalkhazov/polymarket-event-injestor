@@ -5,7 +5,6 @@ import { Topbar } from "@/components/layout/Topbar"
 import { RiskSelector } from "@/components/settings/RiskSelector"
 import { MarketSelector } from "@/components/settings/MarketSelector"
 import { AlpacaConnect } from "@/components/settings/AlpacaConnect"
-import { SubscriptionManager } from "@/components/settings/SubscriptionManager"
 import { showToast } from "@/components/ui/Toast"
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
@@ -70,10 +69,6 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        <section>
-          <SectionHeading>Signal subscriptions</SectionHeading>
-          <SubscriptionManager />
-        </section>
       </div>
     </div>
   )

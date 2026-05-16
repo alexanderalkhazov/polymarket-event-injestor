@@ -7,10 +7,10 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-import anthropic
 import asyncpg
 import redis.asyncio as aioredis
 from openai import OpenAI
+from sentence_transformers import SentenceTransformer
 
 from .prompt import build_prompt, sig_text
 from .fan_out import fan_out_to_users
@@ -18,14 +18,29 @@ from backtester.backtester import SignalBacktester
 
 logger = logging.getLogger(__name__)
 
-claude = anthropic.Anthropic()
-oai = OpenAI()
+_groq: OpenAI | None = None
+_embedder: SentenceTransformer | None = None
+
+
+def _get_groq() -> OpenAI:
+    global _groq
+    if _groq is None:
+        _groq = OpenAI(
+            api_key=os.environ["GROQ_API_KEY"],
+            base_url="https://api.groq.com/openai/v1",
+        )
+    return _groq
+
+
+def _get_embedder() -> SentenceTransformer:
+    global _embedder
+    if _embedder is None:
+        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedder
 
 
 def embed(text: str) -> list[float]:
-    return oai.embeddings.create(
-        input=text, model="text-embedding-3-small"
-    ).data[0].embedding
+    return _get_embedder().encode(text, normalize_embeddings=True).tolist()
 
 
 async def run() -> None:
@@ -146,17 +161,19 @@ async def _process(signal_id: str, db, tsdb, redis) -> None:
         )
     ]
 
-    # 7. Claude API call
+    # 7. Groq API call
     prompt = build_prompt(new_signal, recent, sim_sigs, sim_opps, macro, bt)
+    groq = _get_groq()
     try:
-        resp = claude.messages.create(
-            model="claude-sonnet-4-20250514",
+        resp = groq.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             max_tokens=1200,
+            response_format={"type": "json_object"},
             messages=[{"role": "user", "content": prompt}],
         )
-        opp = json.loads(resp.content[0].text)
+        opp = json.loads(resp.choices[0].message.content)
     except Exception as exc:
-        logger.error("Claude API error: %s", exc)
+        logger.error("Groq API error: %s", exc)
         return
 
     if not opp.get("is_opportunity") or float(opp.get("confidence", 0)) < 0.60:

@@ -1,4 +1,4 @@
-"""Polymarket producer configuration — reads from environment variables."""
+"""Polymarket producer configuration."""
 from __future__ import annotations
 
 import os
@@ -27,7 +27,6 @@ class PolymarketConfig:
 class AppConfig:
     kafka_bootstrap_servers: str
     kafka_topic: str
-    database_url: str
     poll_interval_seconds: int
     polymarket: PolymarketConfig
 
@@ -36,7 +35,6 @@ def load_config() -> AppConfig:
     return AppConfig(
         kafka_bootstrap_servers=_env("KAFKA_BOOTSTRAP_SERVERS", required=True),
         kafka_topic=_env("KAFKA_TOPIC", "raw.polymarket"),
-        database_url=_env("DATABASE_URL", required=True),
         poll_interval_seconds=int(_env("POLL_INTERVAL_SECONDS", "30")),
         polymarket=PolymarketConfig(
             base_url=_env("POLYMARKET_BASE_URL", "https://gamma-api.polymarket.com"),

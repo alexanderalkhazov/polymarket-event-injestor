@@ -16,16 +16,6 @@ CREATE TABLE users (
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE subscriptions (
-  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  source     TEXT NOT NULL CHECK (source IN ('polymarket', 'news', 'analytics')),
-  symbol     TEXT NOT NULL,
-  threshold  NUMERIC,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (user_id, source, symbol)
-);
-
 CREATE TABLE signals (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   source        TEXT NOT NULL CHECK (source IN ('polymarket', 'news', 'analytics')),
@@ -38,7 +28,7 @@ CREATE TABLE signals (
                   CHECK (status IN ('active', 'processing', 'processed', 'dropped')),
   pipeline_step INT NOT NULL DEFAULT 0,
   payload       JSONB NOT NULL DEFAULT '{}',
-  embedding     vector(1536),
+  embedding     vector(384),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX signals_created_at    ON signals (created_at DESC);
@@ -80,7 +70,7 @@ CREATE TABLE opportunities (
   stop_loss_pct       NUMERIC,
   historical_context  TEXT,
   macro_notes         TEXT,
-  embedding           vector(1536),
+  embedding           vector(384),
   raw_response        JSONB,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

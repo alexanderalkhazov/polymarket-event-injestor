@@ -36,8 +36,10 @@ export function BacktestTable({ results }: { results: BacktestResult[] }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const sorted = [...results].sort((a, b) => {
-    const av = (a as Record<string, unknown>)[sortKey] ?? 0
-    const bv = (b as Record<string, unknown>)[sortKey] ?? 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const av = (a as any)[sortKey] ?? 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bv = (b as any)[sortKey] ?? 0
     const cmp = av < bv ? -1 : av > bv ? 1 : 0
     return sortDir === "asc" ? cmp : -cmp
   })

@@ -1,16 +1,14 @@
-"""Polymarket producer — dumb publisher. Fetch raw snapshots, publish to Kafka."""
+"""Polymarket producer — fetch all active markets, publish raw to Kafka."""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 
 from confluent_kafka import Producer
 
 from .config import AppConfig
 from .data_source import PolymarketClient
-from ..pg_subscription_manager import PgSubscriptionManager
 
 logger = logging.getLogger(__name__)
 
@@ -19,15 +17,9 @@ class PolymarketProducer:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
         self._client = PolymarketClient(config.polymarket)
-        self._sub_mgr = PgSubscriptionManager(
-            database_url=config.database_url,
-            source="polymarket",
-            poll_interval_seconds=60,
-        )
         self._producer = Producer({"bootstrap.servers": config.kafka_bootstrap_servers})
 
     async def start(self) -> None:
-        await self._sub_mgr.connect()
         logger.info("Polymarket producer started (topic=%s)", self._config.kafka_topic)
         try:
             while True:
@@ -35,21 +27,12 @@ class PolymarketProducer:
                 await asyncio.sleep(self._config.poll_interval_seconds)
         finally:
             self._producer.flush()
-            await self._sub_mgr.close()
             self._client.close()
 
     async def _poll(self) -> None:
-        subs = await self._sub_mgr.get_symbols()
-        if not subs:
-            logger.debug("No polymarket subscriptions")
-            return
-
-        market_ids = [s.symbol for s in subs]
         loop = asyncio.get_running_loop()
-        snapshots = await loop.run_in_executor(
-            None, self._client.fetch_markets_by_ids, market_ids
-        )
-        logger.info("Fetched %d/%d snapshots", len(snapshots), len(market_ids))
+        snapshots = await loop.run_in_executor(None, self._client.fetch_all_markets)
+        logger.info("Fetched %d Polymarket snapshots", len(snapshots))
 
         for market_id, snap in snapshots.items():
             payload = {

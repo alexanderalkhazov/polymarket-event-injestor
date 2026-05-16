@@ -10,12 +10,7 @@ RISK_PCT = {"conservative": 0.01, "moderate": 0.03, "aggressive": 0.06}
 
 
 async def fan_out_to_users(opp: dict, db, redis) -> None:
-    users = await db.fetch(
-        """SELECT DISTINCT u.* FROM users u
-           JOIN subscriptions s ON s.user_id = u.id
-           WHERE s.symbol = ANY($1::text[])""",
-        opp["tickers"],
-    )
+    users = await db.fetch("SELECT * FROM users WHERE onboarding_complete = TRUE")
     for user in users:
         risk_level = user["risk_level"] or "moderate"
         pct = min(RISK_PCT.get(risk_level, 0.03), float(user.get("max_position_pct") or 0.05))

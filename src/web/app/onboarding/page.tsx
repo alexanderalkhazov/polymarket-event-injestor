@@ -43,15 +43,10 @@ export default function OnboardingPage() {
   const saveAndFinish = async () => {
     setSaving(true)
     try {
-      await fetch("/api/subscriptions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: markets, source: "news" }),
-      })
       await fetch("/api/strategies", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ risk_level: riskLevel, onboarding_complete: true }),
+        body: JSON.stringify({ risk_level: riskLevel, markets, onboarding_complete: true }),
       })
       showToast("Setup complete — welcome to EventEdge")
       router.push("/")

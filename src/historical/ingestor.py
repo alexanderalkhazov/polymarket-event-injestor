@@ -7,7 +7,7 @@ import os
 
 import asyncpg
 import pandas as pd
-import pandas_ta as ta
+import ta as talib
 import schedule
 import time
 import yfinance as yf
@@ -24,16 +24,17 @@ FRED_SERIES = [
     "DTWEXBGS",    # USD index
 ]
 
+DEFAULT_SYMBOLS = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "META", "GOOGL",
+    "AMD", "INTC", "NFLX", "COIN", "PLTR", "SOFI", "SPY", "QQQ",
+]
 
-async def _get_symbols(database_url: str) -> list[str]:
-    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
-    try:
-        rows = await pool.fetch(
-            "SELECT DISTINCT symbol FROM subscriptions WHERE source IN ('news', 'analytics')"
-        )
-        return [r["symbol"] for r in rows]
-    finally:
-        await pool.close()
+
+def _get_symbols() -> list[str]:
+    tickers_env = os.getenv("TICKERS", "")
+    if tickers_env:
+        return [t.strip() for t in tickers_env.split(",") if t.strip()]
+    return DEFAULT_SYMBOLS
 
 
 async def ingest_ohlcv(symbols: list[str], conn: asyncpg.Connection) -> None:
@@ -53,18 +54,16 @@ async def ingest_ohlcv(symbols: list[str], conn: asyncpg.Connection) -> None:
             logger.warning("No data for %s", symbol)
             continue
 
-        s["rsi_14"] = ta.rsi(s["Close"], length=14)
-        s["sma_20"] = ta.sma(s["Close"], length=20)
-        s["sma_50"] = ta.sma(s["Close"], length=50)
-        macd = ta.macd(s["Close"])
-        if macd is not None and not macd.empty:
-            s["macd"] = macd.iloc[:, 0]
-            s["macd_signal"] = macd.iloc[:, 1]
-        s["atr_14"] = ta.atr(s["High"], s["Low"], s["Close"], length=14)
-        bb = ta.bbands(s["Close"], length=20)
-        if bb is not None and not bb.empty:
-            s["bb_upper"] = bb.iloc[:, 0]
-            s["bb_lower"] = bb.iloc[:, 2]
+        s["rsi_14"] = talib.momentum.RSIIndicator(s["Close"], window=14).rsi()
+        s["sma_20"] = talib.trend.SMAIndicator(s["Close"], window=20).sma_indicator()
+        s["sma_50"] = talib.trend.SMAIndicator(s["Close"], window=50).sma_indicator()
+        macd_ind = talib.trend.MACD(s["Close"])
+        s["macd"] = macd_ind.macd()
+        s["macd_signal"] = macd_ind.macd_signal()
+        s["atr_14"] = talib.volatility.AverageTrueRange(s["High"], s["Low"], s["Close"], window=14).average_true_range()
+        bb_ind = talib.volatility.BollingerBands(s["Close"], window=20)
+        s["bb_upper"] = bb_ind.bollinger_hband()
+        s["bb_lower"] = bb_ind.bollinger_lband()
 
         ohlcv_rows = []
         tech_rows = []
@@ -142,10 +141,9 @@ async def ingest_macro(conn: asyncpg.Connection) -> None:
 
 
 async def _run_once() -> None:
-    database_url = os.environ["DATABASE_URL"]
     timescale_url = os.environ["TIMESCALE_URL"]
 
-    symbols = await _get_symbols(database_url)
+    symbols = _get_symbols()
     logger.info("Ingesting %d symbols", len(symbols))
 
     conn = await asyncpg.connect(timescale_url)
