@@ -1,122 +1,289 @@
-Backend + System Design
-# eventedge-ai — algo trading system
+# eventedge-ai — full system specification
 
-## What this system actually does
-
-1. Ingests real-time signals from Polymarket, news, and market analytics
-2. Enriches them against a historical data store (OHLCV, fundamentals, macro)
-3. Runs a backtester to validate any signal cluster against history before escalating it
-4. Sends validated cross-source opportunities through Claude for narrative reasoning
-5. Generates per-user strategies sized to risk profile with a simulated expected-return estimate
-6. Executes via Alpaca (paper or live) with position tracking and P&L accounting
-
-The system does not promise returns. It estimates edge based on historically similar setups,
-surfaces the confidence interval, and lets the user decide. Everything is auditable.
+This document is the single source of truth for the eventedge-ai system.
+It supersedes all previous versions. Read it fully before writing any code.
 
 ---
 
-## Full stack
+## What this system does
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Producers | Python 3.11, confluent-kafka | Dumb fetchers — poll and publish raw |
-| Message broker | Apache Kafka + Zookeeper | Raw event streaming |
-| Consumers | Python 3.11 | Smart detectors — signal detection lives here |
-| Historical store | PostgreSQL 16 + TimescaleDB | OHLCV, fundamentals, macro time-series |
-| Signal/app store | PostgreSQL 16 + pgvector | Signals, opportunities, strategies, trades, users |
-| Cache | Redis 7 | SSE pub/sub fan-out, rate-limit counters |
-| AI correlation | Claude API (claude-sonnet-4-20250514) | Cross-source reasoning with historical context |
-| Embeddings | OpenAI text-embedding-3-small | Signal and opportunity semantic memory |
-| Backtester | Python (vectorbt) | Validate setups before escalating |
-| Historical ingest | Python (yfinance, FRED API) | Nightly OHLCV + macro pull |
-| Frontend | Next.js 14 (App Router) | UI + BFF in one service |
-| DB admin UI | pgAdmin 4 | SQL GUI — connects to both PostgreSQL instances |
-| Execution | Alpaca Trade API | Paper and live order management |
-| Monitoring | Prometheus + Grafana | Metrics across all services |
+A real-time algorithmic trading intelligence platform that:
+1. Ingests multiple data sources continuously (Polymarket, news, price, options, macro, social)
+2. Normalizes all data into a time-indexed feature store — one row per symbol per hour
+3. Scores feature rows against a trained XGBoost model to produce trade predictions
+4. Validates predictions against named, backtested hypotheses before escalating
+5. Uses Claude to generate plain-English narrative for surviving predictions
+6. Delivers personalized strategies to users via SSE
+7. Executes paper or live trades via Alpaca on user confirmation
+
+Claude is NOT the signal detector. Claude is NOT the decision maker.
+The scoring model makes decisions. Claude explains them.
 
 ---
 
-## Architecture
+## Architecture overview
 
 ```
-                    ┌─ Polymarket API ─→ polymarket-producer ─┐
-                    ├─ Finnhub API    ─→ news-producer        ─┼─→ Kafka (raw.*) ─→ consumers ─→ pg (signals)
-                    └─ yfinance       ─→ analytics-producer   ─┘         ↑
-                                                                          │ enrich from
-                    ┌─ yfinance/FRED  ─→ historical-ingestor ────────────┤
-                    └─ (nightly batch)                         timescaledb (OHLCV, macro)
+DATA SOURCES
+  Polymarket API    → polymarket-producer  ─┐
+  Finnhub API       → news-producer        ─┤
+  yfinance          → analytics-producer   ─┼─→ Redpanda (raw.* topics)
+  Options APIs      → options-producer     ─┤
+  FRED API          → (nightly batch)      ─┘
 
-    new signal in pg
-          │
-          ▼
-    backtester (vectorbt)
-    "has this setup worked historically?"
-          │
-          ├── win_rate < 45% or sample_size < 20 → DROP (logged)
-          │
-          ▼
-    AI correlator (Claude API)
-    recent signals + similar past signals (pgvector) + backtest result + macro snapshot
-          │
-          ├── confidence < 0.60 → DROP (logged)
-          │
-          ▼
-    opportunity saved → per-user strategy generated → Redis pub/sub → Next.js SSE → browser
+STREAM PROCESSING
+  Redpanda → consumers (detect + write raw_* tables)
+           → feature-builder (hourly snapshots → features table)
+           → label-filler (nightly → fills forward_return_Nd)
 
-    Next.js ←─→ pg (users, strategies, trades)
-    Next.js ←─→ timescaledb (charts, backtests)
-    Next.js ─→  Alpaca (order execution)
+PREDICTION PIPELINE
+  features table
+    → rule-based scorer (placeholder until model trained)
+    → XGBoost model (replaces placeholder after 90d of labeled data)
+    → hypothesis gate (win_rate ≥ 55%, n ≥ 30, confidence ≥ 0.65)
+    → Claude (narrative only — summary, thesis, risk_note)
+    → strategy builder (per-user sizing)
+    → Redis pub/sub
+    → Next.js SSE
+    → user browser
 
-    pgAdmin ←─→ pg + timescaledb (DB admin GUI at :5050)
+EXECUTION
+  user confirms → POST /api/trades → Alpaca paper or live order
+
+DATABASES
+  PostgreSQL (app DB, port 5432)
+    users, subscriptions, signals, opportunities,
+    hypotheses, backtest_results, strategies, trades, positions
+    extension: pgvector (semantic search on signals + opportunities)
+
+  TimescaleDB (historical DB, port 5433)
+    raw_polymarket, raw_news, raw_ohlcv, raw_options, raw_macro
+    features (the feature store — wide table, hypertable)
+    technicals (pre-computed indicators)
+
+ADMIN
+  pgAdmin (port 5050) — connected to both databases on boot
+
+ML TRAINING (NOT in Docker)
+  runs locally: python src/ml/train.py
+  connects to TimescaleDB via localhost:5433
+  saves model to ./models/scoring_model.json
+  mounted read-only into ai-correlator container
 ```
+
+---
+
+## Stack
+
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Message broker | Redpanda (Confluent-compatible) | Replaces Kafka + Zookeeper. Single binary, native ARM, 512 MB cap |
+| App database | PostgreSQL 16 + pgvector | Signals, users, strategies, trades. pgvector for semantic search |
+| Historical database | PostgreSQL 16 + TimescaleDB | Feature store, OHLCV, macro. Hypertables + compression |
+| Cache / pub-sub | Redis 7 | SSE fan-out to connected browser clients |
+| DB admin UI | pgAdmin 4 | Both databases pre-connected via servers.json |
+| Python services | Python 3.11, asyncpg, confluent-kafka | All producers, consumers, correlator, feature builder |
+| AI narrative | Anthropic Claude API (claude-sonnet-4-20250514) | Narrative only — receives structured prediction, outputs JSON |
+| Embeddings | OpenAI text-embedding-3-small | Signal and opportunity embeddings for pgvector search |
+| Scoring model | XGBoost / LightGBM | Trained locally, mounted into correlator container |
+| ML explainability | SHAP | Per-feature contribution scores fed to Claude prompt |
+| Historical ingest | yfinance, fredapi, pandas-ta | Nightly batch outside market hours |
+| Frontend | Next.js 14 App Router + TypeScript | Replaces React+Vite + Express BFF. API routes = BFF |
+| Auth | NextAuth.js v5 (Credentials, JWT) | No OAuth in v1 |
+| Charts | Recharts | OHLCV with technicals, backtest entry markers |
+| Forms | React Hook Form + Zod | Onboarding, settings, subscriptions |
+| Execution | Alpaca Trade API | Paper mode default. User provides own API keys |
+| Monitoring | Prometheus + Grafana | Optional — separate docker-compose.monitoring.yml |
+
+---
+
+## Deployment architecture
+
+### Recommended: hybrid (local + cloud)
+
+MacBook Air M1 runs the real-time pipeline locally.
+A small cloud VPS (Hetzner CX21, ~€4/month) runs TimescaleDB and nightly batch jobs.
+ML training runs in local Python, outside Docker, connecting to VPS TimescaleDB.
+
+```
+MacBook Air (Docker Compose, ~2 GB RAM, ~15 GB disk)
+  redpanda, postgres, redis, pgadmin
+  nextjs, all producers, all consumers, ai-correlator
+
+Hetzner CX21 (2 vCPU, 4 GB RAM, 40 GB disk, ~€4/mo)
+  timescaledb (full 2yr history, all symbols)
+  feature-builder (hourly cron)
+  label-filler (nightly cron)
+  historical-ingestor (nightly cron)
+
+Local Python (not in Docker)
+  src/ml/train.py — weekly retrain
+  connects to TimescaleDB at VPS_IP:5433
+  saves ./models/scoring_model.json
+```
+
+### Alternative: fully local
+
+Everything on MacBook. Limit TimescaleDB to 6 months history, 5 symbols.
+Enable TimescaleDB compression aggressively.
+Docker Desktop: 10 GB RAM, 60 GB disk image cap, VirtioFS enabled.
 
 ---
 
 ## Docker Compose services
 
-| Service | Port | Notes |
-|---------|------|-------|
-| `nextjs` | 3000 | App + API routes |
-| `kafka` | 9092 | Confluent 7.6 |
-| `zookeeper` | 2181 | Required by Kafka |
-| `postgres` | 5432 | App DB — signals, users, trades (pgvector extension) |
-| `timescale` | 5433 | Historical DB — OHLCV, macro, technicals (TimescaleDB extension) |
-| `redis` | 6379 | SSE fan-out pub/sub |
-| `pgadmin` | 5050 | DB admin GUI — both DBs pre-connected, no login needed locally |
-| `polymarket-producer` | — | Python, polls 30s |
-| `news-producer` | — | Python, polls 5m |
-| `analytics-producer` | — | Python, polls 15m |
-| `historical-ingestor` | — | Python, nightly at 00:30 UTC |
-| `polymarket-consumer` | 9101 | Detects conviction shifts |
-| `news-consumer` | 9102 | Hotness scoring + dedupe |
-| `analytics-consumer` | 9103 | Volume / RSI / options detection |
-| `backtester` | 9104 | Validates signal clusters before AI escalation |
-| `ai-correlator` | 9105 | Claude API + pgvector semantic search |
-| `grafana` | 3001 | Dashboards |
-| `prometheus` | 9090 | Metrics scrape |
-
-### pgAdmin setup (docker-compose.yml snippet)
-
 ```yaml
-pgadmin:
-  image: dpage/pgadmin4:latest
-  environment:
-    PGADMIN_DEFAULT_EMAIL: admin@eventedge.local
-    PGADMIN_DEFAULT_PASSWORD: admin
-    PGADMIN_CONFIG_SERVER_MODE: "False"
-    PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
-  ports:
-    - "5050:80"
-  volumes:
-    - pgadmin_data:/var/lib/pgadmin
-    - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
-  depends_on:
-    - postgres
-    - timescale
+version: "3.9"
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    platform: linux/arm64
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+    ports: ["9092:9092", "9644:9644"]
+    volumes: [redpanda_data:/var/lib/redpanda/data]
+
+  redpanda-console:
+    image: redpandadata/console:latest
+    platform: linux/arm64
+    ports: ["8080:8080"]
+    environment: {KAFKA_BROKERS: redpanda:9092}
+    depends_on: [redpanda]
+
+  postgres:
+    image: postgres:16-alpine
+    platform: linux/arm64
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eventedge
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/app_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    command: postgres -c shared_buffers=128MB -c max_connections=20
+
+  timescale:
+    image: timescale/timescaledb:latest-pg16
+    platform: linux/arm64
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: market_history
+    ports: ["5433:5432"]
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./db/history_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    command: postgres -c shared_buffers=256MB -c max_connections=20
+
+  redis:
+    image: redis:7-alpine
+    platform: linux/arm64
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    platform: linux/amd64
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports: ["5050:80"]
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+
+  nextjs:
+    build: {context: src/web, dockerfile: Dockerfile}
+    platform: linux/arm64
+    ports: ["3000:3000"]
+    env_file: env/nextjs.env
+    depends_on: [postgres, redis]
+
+  polymarket-producer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.event_detectors.polymarket_producer
+    env_file: env/python.env
+    depends_on: [redpanda, postgres]
+    restart: unless-stopped
+
+  news-producer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.event_detectors.news_producer
+    env_file: env/python.env
+    depends_on: [redpanda, postgres]
+    restart: unless-stopped
+
+  analytics-producer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.event_detectors.analytics_producer
+    env_file: env/python.env
+    depends_on: [redpanda, postgres]
+    restart: unless-stopped
+
+  polymarket-consumer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.event_processors.polymarket_consumer
+    env_file: env/python.env
+    depends_on: [redpanda, postgres, timescale]
+    restart: unless-stopped
+
+  news-consumer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.event_processors.news_consumer
+    env_file: env/python.env
+    depends_on: [redpanda, postgres, timescale]
+    restart: unless-stopped
+
+  analytics-consumer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.event_processors.analytics_consumer
+    env_file: env/python.env
+    depends_on: [redpanda, postgres, timescale]
+    restart: unless-stopped
+
+  feature-builder:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.feature_store.scheduler
+    env_file: env/python.env
+    depends_on: [postgres, timescale]
+    restart: unless-stopped
+
+  ai-correlator:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m src.ai_correlator.correlator
+    env_file: env/python.env
+    volumes:
+      - ./models:/app/models:ro
+    depends_on: [postgres, timescale, redis]
+    restart: unless-stopped
+
+volumes:
+  redpanda_data:
+  postgres_data:
+  timescale_data:
+  redis_data:
+  pgadmin_data:
 ```
 
+### pgadmin/servers.json
+
 ```json
-// pgadmin/servers.json — pre-registers both DBs on first boot
 {
   "Servers": {
     "1": {
@@ -129,7 +296,7 @@ pgadmin:
       "MaintenanceDB": "eventedge"
     },
     "2": {
-      "Name": "Historical DB (OHLCV, macro)",
+      "Name": "Historical DB (features, OHLCV)",
       "Group": "eventedge",
       "Host": "timescale",
       "Port": 5432,
@@ -143,88 +310,106 @@ pgadmin:
 
 ---
 
-## Directory layout
+## Kafka topics (Redpanda)
+
+Producers write only to raw.* topics.
+Consumers read from raw.* topics, detect, and write to PostgreSQL signals table.
+The ai-correlator is triggered via Redis, not a Kafka topic.
 
 ```
-eventedge-ai/
-├── src/
-│   ├── event_detectors/               # dumb — fetch raw, publish to Kafka
-│   │   ├── polymarket_producer/
-│   │   ├── news_producer/
-│   │   └── analytics_producer/
-│   ├── event_processors/              # smart — detection logic lives here
-│   │   ├── polymarket_consumer/
-│   │   │   ├── consumer.py
-│   │   │   └── conviction.py          # moved from producer
-│   │   ├── news_consumer/
-│   │   │   ├── consumer.py
-│   │   │   └── signal_detector.py     # moved from producer
-│   │   └── analytics_consumer/
-│   │       ├── consumer.py
-│   │       └── signal_detector.py     # moved from producer
-│   ├── historical/
-│   │   ├── ingestor.py                # nightly OHLCV + macro pull
-│   │   ├── sources/
-│   │   │   ├── yfinance_source.py
-│   │   │   └── fred_source.py
-│   │   └── schema.sql
-│   ├── backtester/
-│   │   ├── backtester.py              # vectorbt signal validation
-│   │   ├── strategies/
-│   │   │   ├── base.py
-│   │   │   ├── conviction_momentum.py
-│   │   │   ├── news_catalyst.py
-│   │   │   └── multi_signal.py
-│   │   └── metrics.py                 # sharpe, drawdown, expectancy
-│   ├── ai_correlator/
-│   │   ├── correlator.py
-│   │   ├── embedder.py
-│   │   ├── prompt.py
-│   │   └── fan_out.py
-│   ├── observability/
-│   └── web/                           # Next.js app
-│       ├── app/
-│       │   ├── (dashboard)/
-│       │   │   ├── layout.tsx
-│       │   │   ├── correlator/page.tsx
-│       │   │   ├── signals/page.tsx
-│       │   │   ├── strategies/page.tsx
-│       │   │   ├── backtests/page.tsx
-│       │   │   ├── history/page.tsx
-│       │   │   └── trades/page.tsx
-│       │   ├── api/
-│       │   │   ├── auth/[...nextauth]/route.ts
-│       │   │   ├── signals/route.ts
-│       │   │   ├── strategies/route.ts
-│       │   │   ├── strategies/stream/route.ts
-│       │   │   ├── trades/route.ts
-│       │   │   ├── backtests/route.ts
-│       │   │   └── history/[symbol]/route.ts
-│       │   └── layout.tsx
-│       ├── lib/
-│       │   ├── db.ts
-│       │   ├── tsdb.ts
-│       │   ├── redis.ts
-│       │   ├── auth.ts
-│       │   └── alpaca.ts
-│       └── components/
-│           ├── SignalFeed.tsx
-│           ├── OpportunityCard.tsx
-│           ├── BacktestResult.tsx
-│           ├── PriceChart.tsx
-│           ├── StrategyCard.tsx
-│           └── TradeConfirm.tsx
-├── db/
-│   ├── app_schema.sql
-│   └── history_schema.sql
-├── pgadmin/
-│   └── servers.json
-├── env/
-├── observability/
-├── scripts/
-├── docker-compose.yml
-├── Dockerfile
-└── pyproject.toml
+raw.polymarket        # raw market snapshots — YES price, volume
+raw.news              # raw articles — headline, sentiment, source
+raw.analytics         # raw OHLCV + options data
+```
+
+---
+
+## Producer pattern — dumb, stateless, just fetch and publish
+
+Producers do zero detection. Zero state. Zero scoring.
+They poll their API, normalize to a common envelope, and publish to Redpanda.
+Detection logic lives entirely in consumers.
+
+```python
+# Example: polymarket_producer/producer.py
+class PolymarketProducer:
+    async def run(self):
+        while True:
+            markets = await self.fetch_subscribed_markets()
+            for market in markets:
+                raw = await self.polymarket_api.get_market(market.symbol)
+                self.kafka.produce(
+                    "raw.polymarket",
+                    key=market.symbol,
+                    value=json.dumps({
+                        "ts": datetime.utcnow().isoformat(),
+                        "symbol": market.symbol,
+                        "market_id": market.id,
+                        "yes_price": raw["yes_price"],
+                        "volume_24h": raw["volume_24h"],
+                    })
+                )
+            await asyncio.sleep(30)
+```
+
+---
+
+## Consumer pattern — smart, stateful, detection lives here
+
+Consumers read raw events, run detection algorithms, write to raw_* tables in
+TimescaleDB, write signal records to PostgreSQL, and notify the correlator via Redis.
+
+Your existing detection algorithms (conviction.py, signal_detector.py) are preserved
+and moved into the consumer classes. They are NOT in the producers.
+
+```python
+# Example: polymarket_consumer/consumer.py
+class PolymarketConsumer:
+    def __init__(self):
+        self.detector = ConvictionDetector()  # moved from producer
+        self.state: dict[str, ConvictionState] = {}
+
+    async def process(self, msg: dict):
+        symbol = msg["symbol"]
+
+        # 1. write raw event to TimescaleDB
+        await self.tsdb.execute(
+            """INSERT INTO raw_polymarket (ts, market_id, symbol, yes_price, volume_24h)
+               VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING""",
+            msg["ts"], msg["market_id"], symbol, msg["yes_price"], msg["volume_24h"]
+        )
+
+        # 2. run detection
+        prev = self.state.get(symbol)
+        signal = self.detector.evaluate(msg, prev)
+        self.state[symbol] = ConvictionState(price=msg["yes_price"])
+
+        if signal:
+            # 3. write signal to PostgreSQL app DB
+            saved = await self.db.fetchrow(
+                """INSERT INTO signals (source, symbol, type, score, direction, payload)
+                   VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""",
+                "polymarket", symbol, signal.type, signal.score,
+                signal.direction, json.dumps(signal.payload)
+            )
+            # 4. notify correlator
+            await self.redis.publish("new_signal", json.dumps({"signal_id": str(saved["id"])}))
+
+# ConvictionDetector — unchanged algorithm from your original conviction.py
+class ConvictionDetector:
+    def evaluate(self, event: dict, state: ConvictionState | None) -> Signal | None:
+        if state is None:
+            return None
+        delta = event["yes_price"] - state.price
+        rel   = abs(delta) / state.price if state.price else 0
+        if abs(delta) >= 0.10 or rel >= 0.20:
+            return Signal(
+                source="polymarket", symbol=event["symbol"],
+                type="conviction_shift", score=abs(delta),
+                direction="yes" if delta > 0 else "no",
+                payload=event,
+            )
+        return None
 ```
 
 ---
@@ -275,9 +460,27 @@ CREATE INDEX signals_source_symbol ON signals (source, symbol);
 CREATE INDEX signals_embedding_idx ON signals
   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
+-- Named, versioned trading hypotheses
+CREATE TABLE hypotheses (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name                  TEXT UNIQUE NOT NULL,
+  description           TEXT NOT NULL,
+  feature_conditions    JSONB NOT NULL,
+  invalidation_conditions JSONB,
+  target_symbol         TEXT,
+  direction             TEXT NOT NULL CHECK (direction IN ('up', 'down')),
+  hold_days             INT NOT NULL DEFAULT 5,
+  confidence_threshold  NUMERIC NOT NULL DEFAULT 0.65,
+  is_active             BOOLEAN NOT NULL DEFAULT TRUE,
+  version               INT NOT NULL DEFAULT 1,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Backtest results for each hypothesis run
 CREATE TABLE backtest_results (
   id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  signal_ids         UUID[] NOT NULL,
+  hypothesis_id      UUID REFERENCES hypotheses(id),
+  signal_ids         UUID[],
   strategy_name      TEXT NOT NULL,
   symbol             TEXT NOT NULL,
   lookback_days      INT NOT NULL DEFAULT 730,
@@ -294,22 +497,25 @@ CREATE TABLE backtest_results (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- AI-identified opportunities (only backtest-validated ones reach here)
 CREATE TABLE opportunities (
   id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  hypothesis_id       UUID REFERENCES hypotheses(id),
   signal_ids          UUID[] NOT NULL,
   backtest_id         UUID REFERENCES backtest_results(id),
-  confidence          NUMERIC NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+  model_confidence    NUMERIC NOT NULL,
   summary             TEXT NOT NULL,
   thesis              TEXT NOT NULL,
+  risk_note           TEXT,
+  historical_note     TEXT,
   action              TEXT NOT NULL CHECK (action IN ('buy', 'sell', 'watch')),
   tickers             TEXT[] NOT NULL DEFAULT '{}',
   expected_return_pct NUMERIC,
   hold_days           INT,
   stop_loss_pct       NUMERIC,
-  historical_context  TEXT,
-  macro_notes         TEXT,
+  top_features        JSONB,     -- SHAP values from scoring model
+  macro_snapshot      JSONB,
   embedding           vector(1536),
-  raw_response        JSONB,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX opportunities_embedding_idx ON opportunities
@@ -341,7 +547,7 @@ CREATE TABLE trades (
   qty              NUMERIC NOT NULL,
   fill_price       NUMERIC,
   status           TEXT NOT NULL DEFAULT 'pending'
-                     CHECK (status IN ('pending', 'submitted', 'filled', 'cancelled', 'rejected')),
+                     CHECK (status IN ('pending','submitted','filled','cancelled','rejected')),
   is_paper         BOOLEAN NOT NULL DEFAULT TRUE,
   pnl_usd          NUMERIC,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -369,388 +575,439 @@ CREATE TABLE positions (
 ```sql
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
-CREATE TABLE ohlcv (
-  time     TIMESTAMPTZ NOT NULL,
+-- Raw source tables (append-only, used to recompute features)
+CREATE TABLE raw_polymarket (
+  ts         TIMESTAMPTZ NOT NULL,
+  market_id  TEXT NOT NULL,
+  symbol     TEXT NOT NULL,
+  yes_price  NUMERIC NOT NULL,
+  volume_24h NUMERIC,
+  PRIMARY KEY (ts, market_id)
+);
+SELECT create_hypertable('raw_polymarket', 'ts');
+
+CREATE TABLE raw_news (
+  ts              TIMESTAMPTZ NOT NULL,
+  article_id      TEXT NOT NULL,
+  symbol          TEXT NOT NULL,
+  headline        TEXT NOT NULL,
+  sentiment_score NUMERIC,
+  hotness         NUMERIC,
+  source          TEXT,
+  PRIMARY KEY (ts, article_id)
+);
+SELECT create_hypertable('raw_news', 'ts');
+
+CREATE TABLE raw_ohlcv (
+  ts       TIMESTAMPTZ NOT NULL,
   symbol   TEXT NOT NULL,
-  open     NUMERIC NOT NULL,
-  high     NUMERIC NOT NULL,
-  low      NUMERIC NOT NULL,
+  interval TEXT NOT NULL CHECK (interval IN ('1h', '1d')),
+  open     NUMERIC,
+  high     NUMERIC,
+  low      NUMERIC,
   close    NUMERIC NOT NULL,
   volume   BIGINT NOT NULL,
-  interval TEXT NOT NULL CHECK (interval IN ('1d', '1h')),
-  PRIMARY KEY (time, symbol, interval)
+  PRIMARY KEY (ts, symbol, interval)
 );
-SELECT create_hypertable('ohlcv', 'time');
-CREATE INDEX ohlcv_symbol ON ohlcv (symbol, time DESC);
+SELECT create_hypertable('raw_ohlcv', 'ts');
+CREATE INDEX raw_ohlcv_symbol ON raw_ohlcv (symbol, ts DESC);
 
-CREATE TABLE macro_indicators (
-  time      TIMESTAMPTZ NOT NULL,
+CREATE TABLE raw_options (
+  ts             TIMESTAMPTZ NOT NULL,
+  symbol         TEXT NOT NULL,
+  put_volume     BIGINT,
+  call_volume    BIGINT,
+  unusual_sweeps INT DEFAULT 0,
+  PRIMARY KEY (ts, symbol)
+);
+SELECT create_hypertable('raw_options', 'ts');
+
+CREATE TABLE raw_macro (
+  ts        TIMESTAMPTZ NOT NULL,
   series_id TEXT NOT NULL,
   value     NUMERIC NOT NULL,
-  PRIMARY KEY (time, series_id)
+  PRIMARY KEY (ts, series_id)
 );
-SELECT create_hypertable('macro_indicators', 'time');
+SELECT create_hypertable('raw_macro', 'ts');
 
-CREATE TABLE technicals (
-  time        TIMESTAMPTZ NOT NULL,
-  symbol      TEXT NOT NULL,
-  interval    TEXT NOT NULL,
-  rsi_14      NUMERIC,
-  sma_20      NUMERIC,
-  sma_50      NUMERIC,
-  ema_12      NUMERIC,
-  ema_26      NUMERIC,
-  macd        NUMERIC,
-  macd_signal NUMERIC,
-  atr_14      NUMERIC,
-  bb_upper    NUMERIC,
-  bb_lower    NUMERIC,
-  adx_14      NUMERIC,
-  PRIMARY KEY (time, symbol, interval)
+-- THE FEATURE STORE — one row per symbol per hour, every known feature
+CREATE TABLE features (
+  ts                        TIMESTAMPTZ NOT NULL,
+  symbol                    TEXT NOT NULL,
+
+  -- Polymarket features
+  poly_yes_price            NUMERIC,
+  poly_conviction_delta_1h  NUMERIC,
+  poly_conviction_delta_4h  NUMERIC,
+  poly_volume_24h           NUMERIC,
+
+  -- News features
+  news_sentiment_1h         NUMERIC,
+  news_sentiment_4h         NUMERIC,
+  news_hotness_peak_4h      NUMERIC,
+  news_article_count_4h     INT,
+
+  -- Price / technical features
+  rsi_14                    NUMERIC,
+  macd_histogram            NUMERIC,
+  atr_14                    NUMERIC,
+  bb_position               NUMERIC,
+  sma_20_slope              NUMERIC,
+  vol_ratio_30d             NUMERIC,
+  price_change_1d           NUMERIC,
+  price_change_5d           NUMERIC,
+
+  -- Options features
+  put_call_ratio            NUMERIC,
+  unusual_sweep_count_4h    INT,
+
+  -- Macro features (latest available as of ts)
+  vix_level                 NUMERIC,
+  wti_crude                 NUMERIC,
+  us_10y_yield              NUMERIC,
+  fed_funds_rate            NUMERIC,
+  usd_index                 NUMERIC,
+
+  -- Social features
+  social_sentiment_z        NUMERIC,
+
+  -- Outcome labels (filled nightly for rows >= hold_days old)
+  forward_return_1d         NUMERIC,
+  forward_return_5d         NUMERIC,
+  forward_return_10d        NUMERIC,
+  label_filled_at           TIMESTAMPTZ,
+
+  PRIMARY KEY (ts, symbol)
 );
-SELECT create_hypertable('technicals', 'time');
+SELECT create_hypertable('features', 'ts');
+CREATE INDEX features_symbol     ON features (symbol, ts DESC);
+CREATE INDEX features_unlabeled  ON features (ts) WHERE forward_return_5d IS NULL;
 
--- weekly continuous aggregate (TimescaleDB computes this automatically)
-CREATE MATERIALIZED VIEW ohlcv_weekly
-  WITH (timescaledb.continuous) AS
-  SELECT time_bucket('7 days', time) AS week,
-         symbol,
-         first(open, time)  AS open,
-         max(high)          AS high,
-         min(low)           AS low,
-         last(close, time)  AS close,
-         sum(volume)        AS volume
-  FROM ohlcv WHERE interval = '1d'
-  GROUP BY week, symbol;
+-- Enable compression (saves ~90% disk on historical data)
+ALTER TABLE features SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'symbol'
+);
+SELECT add_compression_policy('features', INTERVAL '7 days');
+
+ALTER TABLE raw_ohlcv SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'symbol'
+);
+SELECT add_compression_policy('raw_ohlcv', INTERVAL '7 days');
 ```
 
 ---
 
-## Historical ingestor (nightly batch)
+## Feature store builder
+
+Runs hourly. Writes one feature row per symbol using as-of queries.
+Critical rule: every feature value must use only data available at or before ts.
+No lookahead. Ever.
 
 ```python
-# historical/ingestor.py
-import yfinance as yf
-import pandas as pd
-import pandas_ta as ta
-from fredapi import Fred
-import asyncpg, asyncio, os
+# src/feature_store/builder.py
+SYMBOLS = ["USO", "XOM", "SPY", "QQQ", "GLD", "TLT", "LNG", "XLE"]
+DEV_SYMBOLS = ["USO", "SPY", "QQQ"]  # use when DEV_MODE=true
 
-FRED_SERIES = [
-  "FEDFUNDS",   # fed funds rate
-  "CPIAUCSL",   # CPI
-  "DCOILWTICO", # WTI crude
-  "DGS10",      # US 10Y yield
-  "VIXCLS",     # VIX
-  "DTWEXBGS",   # USD index
+class FeatureBuilder:
+    async def build_snapshot(self, symbol: str, ts: datetime) -> dict:
+        features = {"ts": ts, "symbol": symbol}
+        features.update(await self._poly_features(symbol, ts))
+        features.update(await self._news_features(symbol, ts))
+        features.update(await self._price_features(symbol, ts))
+        features.update(await self._options_features(symbol, ts))
+        features.update(await self._macro_features(ts))
+        return features
+
+    async def _poly_features(self, symbol, ts):
+        # as-of query: latest yes_price at or before ts
+        current = await self.tsdb.fetchval(
+            "SELECT yes_price FROM raw_polymarket WHERE symbol=$1 AND ts<=$2 ORDER BY ts DESC LIMIT 1",
+            symbol, ts
+        )
+        prev_1h = await self.tsdb.fetchval(
+            "SELECT yes_price FROM raw_polymarket WHERE symbol=$1 AND ts<=$2-INTERVAL '1 hour' ORDER BY ts DESC LIMIT 1",
+            symbol, ts
+        )
+        prev_4h = await self.tsdb.fetchval(
+            "SELECT yes_price FROM raw_polymarket WHERE symbol=$1 AND ts<=$2-INTERVAL '4 hours' ORDER BY ts DESC LIMIT 1",
+            symbol, ts
+        )
+        return {
+            "poly_yes_price":           float(current) if current else None,
+            "poly_conviction_delta_1h": float(current) - float(prev_1h) if current and prev_1h else None,
+            "poly_conviction_delta_4h": float(current) - float(prev_4h) if current and prev_4h else None,
+        }
+    # ... _news_features, _price_features, _options_features, _macro_features follow same pattern
+```
+
+---
+
+## Label filler (nightly)
+
+```python
+# src/feature_store/label_filler.py
+async def fill_labels(tsdb, hold_days: int = 5):
+    unlabeled = await tsdb.fetch(
+        """SELECT ts, symbol FROM features
+           WHERE forward_return_5d IS NULL
+             AND ts < NOW() - ($1 * INTERVAL '1 day')""",
+        hold_days * 1.5  # buffer for weekends
+    )
+    for row in unlabeled:
+        price_at_ts = await tsdb.fetchval(
+            "SELECT close FROM raw_ohlcv WHERE symbol=$1 AND interval='1d' AND ts<=$2 ORDER BY ts DESC LIMIT 1",
+            row["symbol"], row["ts"]
+        )
+        price_forward = await tsdb.fetchval(
+            "SELECT close FROM raw_ohlcv WHERE symbol=$1 AND interval='1d' AND ts>$2 ORDER BY ts ASC LIMIT 1 OFFSET $3",
+            row["symbol"], row["ts"], hold_days - 1
+        )
+        if price_at_ts and price_forward:
+            fwd = (float(price_forward) - float(price_at_ts)) / float(price_at_ts)
+            await tsdb.execute(
+                "UPDATE features SET forward_return_5d=$1, label_filled_at=NOW() WHERE ts=$2 AND symbol=$3",
+                fwd, row["ts"], row["symbol"]
+            )
+```
+
+---
+
+## Scoring model
+
+### Phase 1: rule-based placeholder (use until 90 days of labeled data)
+
+```python
+# src/ml/rule_scorer.py
+def rule_based_score(features: dict) -> float:
+    score = 0.0
+    if (features.get("poly_conviction_delta_1h") or 0) > 0.10:  score += 0.30
+    if (features.get("vol_ratio_30d") or 0) > 2.0:              score += 0.25
+    if (features.get("news_sentiment_1h") or 0) > 0.70:         score += 0.20
+    if (features.get("rsi_14") or 50) < 35:                     score += 0.15
+    if (features.get("put_call_ratio") or 1) < 0.40:            score += 0.10
+    return min(score, 1.0)
+```
+
+### Phase 2: XGBoost model (run outside Docker)
+
+```python
+# src/ml/train.py
+import asyncpg, asyncio, xgboost as xgb, pandas as pd, shap
+from sklearn.model_selection import TimeSeriesSplit
+
+FEATURE_COLS = [
+    "poly_conviction_delta_1h", "poly_conviction_delta_4h",
+    "news_sentiment_1h", "news_sentiment_4h", "news_hotness_peak_4h",
+    "news_article_count_4h", "rsi_14", "macd_histogram", "atr_14",
+    "bb_position", "sma_20_slope", "vol_ratio_30d",
+    "price_change_1d", "price_change_5d", "put_call_ratio",
+    "unusual_sweep_count_4h", "vix_level", "wti_crude",
+    "us_10y_yield", "fed_funds_rate", "usd_index", "social_sentiment_z",
 ]
 
-async def ingest_ohlcv(symbols: list[str], conn: asyncpg.Connection):
-    df = yf.download(symbols, period="2y", interval="1d", auto_adjust=True)
-    for symbol in symbols:
-        try:
-            s = df.xs(symbol, axis=1, level=1).dropna()
-        except KeyError:
-            continue
+async def load_data():
+    # connects to localhost:5433 — the exposed TimescaleDB port
+    conn = await asyncpg.connect("postgresql://postgres:postgres@localhost:5433/market_history")
+    rows = await conn.fetch(
+        "SELECT * FROM features WHERE forward_return_5d IS NOT NULL ORDER BY ts ASC"
+    )
+    return pd.DataFrame([dict(r) for r in rows])
 
-        s["rsi_14"]      = ta.rsi(s["Close"], length=14)
-        s["sma_20"]      = ta.sma(s["Close"], length=20)
-        s["sma_50"]      = ta.sma(s["Close"], length=50)
-        macd             = ta.macd(s["Close"])
-        s["macd"]        = macd["MACD_12_26_9"]
-        s["macd_signal"] = macd["MACDs_12_26_9"]
-        s["atr_14"]      = ta.atr(s["High"], s["Low"], s["Close"], 14)
-        bb               = ta.bbands(s["Close"], length=20)
-        s["bb_upper"]    = bb["BBU_20_2.0"]
-        s["bb_lower"]    = bb["BBL_20_2.0"]
+def train(df):
+    X = df[FEATURE_COLS].fillna(0)
+    y = (df["forward_return_5d"] > 0.03).astype(int)  # label: up >3% in 5d
 
-        rows = [
-            (row.Index.to_pydatetime(), symbol,
-             row.Open, row.High, row.Low, row.Close, int(row.Volume), "1d")
-            for row in s.itertuples()
-        ]
-        await conn.executemany(
-            """INSERT INTO ohlcv (time,symbol,open,high,low,close,volume,interval)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-               ON CONFLICT (time,symbol,interval) DO UPDATE
-               SET open=$3,high=$4,low=$5,close=$6,volume=$7""",
-            rows
+    model = xgb.XGBClassifier(
+        n_estimators=300, max_depth=4, learning_rate=0.05,
+        subsample=0.8, tree_method="hist", device="cpu",
+        eval_metric="logloss", use_label_encoder=False,
+    )
+    tscv = TimeSeriesSplit(n_splits=5)
+    for train_idx, val_idx in tscv.split(X):
+        model.fit(
+            X.iloc[train_idx], y.iloc[train_idx],
+            eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
+            verbose=False,
         )
 
-async def ingest_macro(conn: asyncpg.Connection):
-    fred = Fred(api_key=os.environ["FRED_API_KEY"])
-    for series_id in FRED_SERIES:
-        data = fred.get_series(series_id, observation_start="2020-01-01")
-        rows = [(ts.to_pydatetime(), series_id, float(val))
-                for ts, val in data.items() if pd.notna(val)]
-        await conn.executemany(
-            """INSERT INTO macro_indicators (time,series_id,value)
-               VALUES ($1,$2,$3)
-               ON CONFLICT (time,series_id) DO UPDATE SET value=$3""",
-            rows
-        )
-```
+    model.save_model("models/scoring_model.json")
 
----
+    # compute SHAP explainer and save
+    explainer = shap.TreeExplainer(model)
+    import pickle
+    with open("models/shap_explainer.pkl", "wb") as f:
+        pickle.dump(explainer, f)
 
-## Backtester — validate before Claude sees it
+    print(f"Model saved. Samples: {len(df)}, Features: {len(FEATURE_COLS)}")
 
-```python
-# backtester/backtester.py
-import vectorbt as vbt
-import numpy as np
-import pandas as pd
-
-MIN_SAMPLE = 20
-MIN_WIN    = 0.45
-
-class SignalBacktester:
-    def __init__(self, tsdb):
-        self.tsdb = tsdb
-
-    async def validate(self, signals: list[dict]) -> dict:
-        symbol = signals[0]["symbol"]
-        ohlcv  = await self._load_ohlcv(symbol)
-        if ohlcv is None or len(ohlcv) < 60:
-            return self._fail("insufficient history")
-
-        entry_dates = await self._find_similar_setups(signals, ohlcv)
-        if len(entry_dates) < MIN_SAMPLE:
-            return self._fail(f"only {len(entry_dates)} occurrences, need {MIN_SAMPLE}")
-
-        returns  = self._forward_returns(ohlcv, entry_dates, hold_days=5)
-        wins     = [r for r in returns if r > 0]
-        losses   = [r for r in returns if r <= 0]
-        win_rate = len(wins) / len(returns)
-        avg_ret  = float(np.mean(returns))
-        med_ret  = float(np.median(returns))
-        avg_win  = float(np.mean(wins))   if wins   else 0.0
-        avg_loss = float(np.mean(losses)) if losses else 0.0
-        expect   = win_rate * avg_win - (1 - win_rate) * abs(avg_loss)
-
-        passed = win_rate >= MIN_WIN and len(returns) >= MIN_SAMPLE
-
-        return {
-            "passed":             passed,
-            "sample_size":        len(returns),
-            "win_rate":           round(win_rate, 4),
-            "avg_return_pct":     round(avg_ret * 100, 2),
-            "median_return_pct":  round(med_ret * 100, 2),
-            "expectancy":         round(expect * 100, 2),
-            "sharpe":             round(self._sharpe(returns), 2),
-            "max_drawdown_pct":   round(self._max_dd(returns) * 100, 2),
-            "strategy_name":      "multi_" + "+".join(sorted({s["type"] for s in signals})),
-            "symbol":             symbol,
-        }
-
-    async def _find_similar_setups(self, signals, ohlcv) -> list:
-        mask = pd.Series(True, index=ohlcv.index)
-        for s in signals:
-            if s["type"] == "volume_spike":
-                avg30 = ohlcv["volume"].rolling(30).mean()
-                mask &= ohlcv["volume"] > 2 * avg30
-            elif s["type"] == "rsi_extreme":
-                rsi = vbt.RSI.run(ohlcv["close"], window=14).rsi
-                mask &= (rsi > 75) if s["direction"] == "up" else (rsi < 25)
-            elif s["type"] == "momentum":
-                chg = ohlcv["close"].pct_change(1)
-                mask &= (chg > 0.05) if s["direction"] == "up" else (chg < -0.05)
-            elif s["type"] == "conviction_shift":
-                vix = await self._load_macro("VIXCLS", ohlcv.index)
-                if vix is not None:
-                    mask &= vix > vix.rolling(20).mean() * 1.2
-        return list(ohlcv.index[mask])
-
-    def _forward_returns(self, ohlcv, dates, hold_days) -> list[float]:
-        closes  = ohlcv["close"]
-        results = []
-        for d in dates:
-            try:
-                i   = closes.index.get_loc(d)
-                j   = min(i + hold_days, len(closes) - 1)
-                results.append((closes.iloc[j] - closes.iloc[i]) / closes.iloc[i])
-            except Exception:
-                continue
-        return results
-
-    def _sharpe(self, r):
-        a = np.array(r)
-        return float(np.mean(a) / np.std(a) * np.sqrt(252)) if np.std(a) > 0 else 0.0
-
-    def _max_dd(self, r):
-        curve = np.cumprod(1 + np.array(r))
-        peak  = np.maximum.accumulate(curve)
-        return float(((curve - peak) / peak).min())
-
-    def _fail(self, reason):
-        return {"passed": False, "drop_reason": reason,
-                "sample_size": 0, "win_rate": 0, "expectancy": 0}
+df = asyncio.run(load_data())
+train(df)
 ```
 
 ---
 
 ## AI correlator — full pipeline
 
+Claude's role: receives a structured prediction payload, returns a JSON object
+with four fields: summary, thesis, risk_note, historical_note.
+Claude never decides if something is an opportunity. The model does that.
+
 ```python
-# ai_correlator/correlator.py
-import anthropic, json
+# src/ai_correlator/correlator.py
+import anthropic, json, xgboost as xgb, shap, pickle
 from openai import OpenAI
 
 claude = anthropic.Anthropic()
 oai    = OpenAI()
 
-def embed(text: str) -> list[float]:
-    return oai.embeddings.create(
-        input=text, model="text-embedding-3-small"
-    ).data[0].embedding
+model     = xgb.XGBClassifier()
+model.load_model("models/scoring_model.json")
+with open("models/shap_explainer.pkl", "rb") as f:
+    explainer = pickle.load(f)
 
-def sig_text(s: dict) -> str:
-    return f"{s['source']} {s['type']} {s['symbol']} score={s['score']} dir={s['direction']}"
+USE_RULE_SCORER = not Path("models/scoring_model.json").exists()
 
-async def run(new_signal: dict, db, tsdb):
-    # 1. embed and store
-    vec = embed(sig_text(new_signal))
-    await db.execute("UPDATE signals SET embedding=$1 WHERE id=$2",
-                     [vec, new_signal["id"]])
+async def run(signal_id: str, db, tsdb):
+    signal  = await db.fetchrow("SELECT * FROM signals WHERE id=$1", signal_id)
+    symbol  = signal["symbol"]
 
-    # 2. time-window gate — need 2+ sources
-    recent  = await db.fetch(
-        "SELECT * FROM signals WHERE created_at > NOW()-INTERVAL '15 minutes'"
+    # 1. get current feature row
+    features = await tsdb.fetchrow(
+        "SELECT * FROM features WHERE symbol=$1 ORDER BY ts DESC LIMIT 1", symbol
     )
-    sources = {s["source"] for s in recent}
-    if len(sources) < 2:
+    if not features:
         return None
 
-    # 3. backtest gate — drop if no historical edge
-    bt = await SignalBacktester(tsdb).validate(recent)
+    feat_dict = dict(features)
+
+    # 2. score
+    if USE_RULE_SCORER:
+        from src.ml.rule_scorer import rule_based_score
+        confidence = rule_based_score(feat_dict)
+        top_features = []
+    else:
+        X = pd.DataFrame([{c: feat_dict.get(c, 0) for c in FEATURE_COLS}]).fillna(0)
+        confidence = float(model.predict_proba(X)[0][1])
+        shap_vals  = explainer.shap_values(X)[0]
+        top_features = sorted(
+            [{"feature": FEATURE_COLS[i], "current_value": float(X.iloc[0, i]),
+              "shap_value": float(shap_vals[i])}
+             for i in range(len(FEATURE_COLS))],
+            key=lambda x: abs(x["shap_value"]), reverse=True
+        )[:5]
+
+    # 3. gate
+    if confidence < 0.65:
+        return None
+
+    # 4. hypothesis validation
+    hypothesis = await match_hypothesis(feat_dict, db)
+    if not hypothesis:
+        return None
+
+    bt = await run_backtest(hypothesis, tsdb)
     if not bt["passed"]:
-        await db.execute(
-            "INSERT INTO backtest_results (signal_ids,strategy_name,symbol,sample_size,"
-            "win_rate,avg_return_pct,median_return_pct,expectancy,passed,drop_reason,payload) "
-            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10)",
-            [[s["id"] for s in recent], bt.get("strategy_name","unknown"),
-             new_signal["symbol"], bt["sample_size"], bt["win_rate"],
-             bt.get("avg_return_pct",0), bt.get("median_return_pct",0),
-             bt["expectancy"], bt.get("drop_reason"), json.dumps(bt)]
-        )
         return None
 
-    # 4. semantic context
-    sim_sigs = await db.fetch(
-        """SELECT *, 1-(embedding<=>$1::vector) AS sim FROM signals
-           WHERE created_at < NOW()-INTERVAL '15 minutes' AND embedding IS NOT NULL
-           ORDER BY embedding<=>$1::vector LIMIT 5""", [vec]
-    )
-    sim_opps = await db.fetch(
+    # 5. semantic context (pgvector)
+    vec = embed(f"{signal['source']} {signal['type']} {symbol}")
+    similar_opps = await db.fetch(
         """SELECT *, 1-(embedding<=>$1::vector) AS sim FROM opportunities
-           WHERE embedding IS NOT NULL
-           ORDER BY embedding<=>$1::vector LIMIT 3""", [vec]
+           WHERE embedding IS NOT NULL ORDER BY embedding<=>$1::vector LIMIT 3""",
+        vec
     )
 
-    # 5. macro snapshot
+    # 6. macro snapshot
     macro = await tsdb.fetch(
-        """SELECT DISTINCT ON (series_id) series_id, value
-           FROM macro_indicators
-           ORDER BY series_id, time DESC"""
+        "SELECT DISTINCT ON (series_id) series_id, value FROM raw_macro ORDER BY series_id, ts DESC"
     )
 
-    # 6. Claude reasoning
-    prompt = build_prompt(new_signal, recent, sim_sigs, sim_opps, macro, bt)
-    resp   = claude.messages.create(
+    # 7. Claude narrative
+    prompt   = build_prompt(signal, confidence, top_features, bt, similar_opps, macro, hypothesis)
+    response = claude.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=1200,
+        max_tokens=800,
         messages=[{"role": "user", "content": prompt}]
     )
-    opp = json.loads(resp.content[0].text)
-    if not opp["is_opportunity"] or opp["confidence"] < 0.60:
-        return None
+    narrative = json.loads(response.content[0].text)
 
-    # 7. save backtest + opportunity + embedding
-    saved_bt = await db.fetchrow(
-        """INSERT INTO backtest_results
-           (signal_ids,strategy_name,symbol,sample_size,win_rate,avg_return_pct,
-            median_return_pct,sharpe,max_drawdown_pct,expectancy,passed,payload)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11) RETURNING id""",
-        [[s["id"] for s in recent], bt["strategy_name"], new_signal["symbol"],
-         bt["sample_size"], bt["win_rate"], bt["avg_return_pct"],
-         bt["median_return_pct"], bt.get("sharpe"), bt.get("max_drawdown_pct"),
-         bt["expectancy"], json.dumps(bt)]
-    )
-    opp_vec   = embed(opp["summary"] + " " + opp["thesis"])
-    saved_opp = await db.fetchrow(
+    # 8. save opportunity
+    opp_vec = embed(narrative["summary"] + " " + narrative["thesis"])
+    saved   = await db.fetchrow(
         """INSERT INTO opportunities
-           (signal_ids,backtest_id,confidence,summary,thesis,action,tickers,
-            expected_return_pct,hold_days,stop_loss_pct,historical_context,
-            macro_notes,embedding,raw_response)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *""",
-        [[s["id"] for s in recent], saved_bt["id"], opp["confidence"],
-         opp["summary"], opp["thesis"], opp["action"], opp["tickers"],
-         opp.get("expected_return_pct"), opp.get("hold_days"),
-         opp.get("stop_loss_pct"), opp.get("historical_context"),
-         opp.get("macro_notes"), opp_vec, json.dumps(opp)]
+           (hypothesis_id, signal_ids, backtest_id, model_confidence, summary, thesis,
+            risk_note, historical_note, action, tickers, expected_return_pct, hold_days,
+            stop_loss_pct, top_features, embedding)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *""",
+        hypothesis["id"], [signal_id], bt["id"], confidence,
+        narrative["summary"], narrative["thesis"], narrative["risk_note"],
+        narrative.get("historical_note"), hypothesis["direction"] == "up" and "buy" or "sell",
+        [symbol], bt["avg_return_pct"], hypothesis["hold_days"],
+        0.03, json.dumps(top_features), opp_vec
     )
 
-    await fan_out_to_users(saved_opp, db)
-    return saved_opp
+    await fan_out_to_users(saved, db)
+    return saved
 
 
-def build_prompt(new_signal, recent, sim_sigs, sim_opps, macro, bt) -> str:
-    recent_str  = "\n".join(f"  {sig_text(s)}" for s in recent)
-    sim_sig_str = "\n".join(
-        f"  [{s['sim']:.0%}] {sig_text(s)}" for s in sim_sigs
-    ) or "  none"
-    sim_opp_str = "\n".join(
-        f"  [{o['sim']:.0%}] {o['summary']} — action={o['action']} conf={o['confidence']:.0%}"
-        for o in sim_opps
-    ) or "  none"
+def build_prompt(signal, confidence, top_features, bt, similar_opps, macro, hypothesis) -> str:
+    top_feat_str = "\n".join(
+        f"  {f['feature']}: {f['current_value']:.3f} "
+        f"({'supports' if f['shap_value'] > 0 else 'weighs against'}, "
+        f"impact {abs(f['shap_value']):.3f})"
+        for f in top_features
+    ) or "  rule-based scoring active (model not yet trained)"
+
+    similar_str = "\n".join(
+        f"  [{o['sim']:.0%} match] {o['summary']} — conf {o['model_confidence']:.0%}"
+        for o in similar_opps
+    ) or "  none found"
+
     macro_str = "\n".join(f"  {r['series_id']}: {r['value']}" for r in macro)
 
-    return f"""You are a quantitative analyst inside an algorithmic trading system.
+    return f"""You are a trading strategy analyst. A quantitative model has identified a
+prediction. Your ONLY job is to explain it clearly in four fields.
+Do NOT question the numbers. Do NOT add your own probability estimates.
+Do NOT say whether this is a good or bad trade. Just explain what the model found.
 
-NEW SIGNAL:
-  {sig_text(new_signal)}
+HYPOTHESIS: {hypothesis['name']}
+  {hypothesis['description']}
 
-RECENT CROSS-SOURCE SIGNALS (last 15 min, {len(recent)} signals, {len({s['source'] for s in recent})} sources):
-{recent_str}
+PREDICTION:
+  Symbol: {signal['symbol']}
+  Model confidence: {confidence:.0%}
+  Historical win rate: {bt['win_rate']:.0%} over {bt['sample_size']} occurrences
+  Avg return: {bt['avg_return_pct']}% over {hypothesis['hold_days']} days
+  Expectancy: {bt['expectancy']}% per trade
 
-BACKTEST RESULT (how this exact signal combination performed historically):
-  sample_size={bt['sample_size']} occurrences over 2 years
-  win_rate={bt['win_rate']:.0%}
-  avg_return={bt['avg_return_pct']}% (5-day hold)
-  median_return={bt['median_return_pct']}%
-  sharpe={bt.get('sharpe','n/a')}
-  max_drawdown={bt.get('max_drawdown_pct','n/a')}%
-  expectancy={bt['expectancy']}% per trade
+TOP FEATURES DRIVING MODEL SCORE (SHAP values):
+{top_feat_str}
 
-SEMANTICALLY SIMILAR PAST SIGNALS:
-{sim_sig_str}
+SIMILAR PAST OPPORTUNITIES:
+{similar_str}
 
-SIMILAR PAST OPPORTUNITIES AND OUTCOMES:
-{sim_opp_str}
-
-CURRENT MACRO CONDITIONS:
+CURRENT MACRO:
 {macro_str}
 
-INSTRUCTIONS:
-- Base expected_return_pct directly on the backtest avg_return_pct — do not fabricate.
-- If win_rate < 50%, cap confidence at 0.65 regardless of signal strength.
-- Factor macro context into your thesis (e.g. rising rates affect equities differently than commodities).
-- Reference similar past opportunities if found and note whether they played out.
+Write exactly these four fields. Keep each tight.
+- summary: one sentence, plain English, no jargon, no numbers except the symbol
+- thesis: two to three sentences explaining what signals aligned and why they matter together
+- risk_note: one sentence on the main thing that could invalidate this setup
+- historical_note: one sentence referencing a similar past opportunity if found, else null
 
-Respond ONLY in valid JSON with no preamble:
+Respond ONLY in valid JSON, no preamble, no markdown:
 {{
-  "is_opportunity": <bool>,
-  "confidence": <0.0–1.0>,
-  "summary": "<one sentence, plain English, for a non-expert user>",
-  "thesis": "<2–3 sentences: why signals correlate, what the trade is>",
-  "action": "<buy|sell|watch>",
-  "tickers": ["<symbols>"],
-  "expected_return_pct": <number sourced from backtest>,
-  "hold_days": <suggested holding period>,
-  "stop_loss_pct": <e.g. 0.03>,
-  "historical_context": "<note on similar past setups, or null>",
-  "macro_notes": "<how current macro affects this trade, or null>"
+  "summary": "...",
+  "thesis": "...",
+  "risk_note": "...",
+  "historical_note": "..." or null
 }}"""
+
+
+def embed(text: str) -> list[float]:
+    return oai.embeddings.create(input=text, model="text-embedding-3-small").data[0].embedding
 ```
 
 ---
@@ -758,9 +1015,7 @@ Respond ONLY in valid JSON with no preamble:
 ## Fan-out and position sizing
 
 ```python
-# ai_correlator/fan_out.py
-import json
-
+# src/ai_correlator/fan_out.py
 RISK_PCT = {"conservative": 0.01, "moderate": 0.03, "aggressive": 0.06}
 
 async def fan_out_to_users(opp: dict, db):
@@ -768,43 +1023,103 @@ async def fan_out_to_users(opp: dict, db):
         """SELECT DISTINCT u.* FROM users u
            JOIN subscriptions s ON s.user_id = u.id
            WHERE s.symbol = ANY($1::text[])""",
-        [opp["tickers"]]
+        opp["tickers"]
     )
     for user in users:
-        pct     = min(RISK_PCT[user["risk_level"]], user["max_position_pct"])
-        tp_pct  = (opp["expected_return_pct"] or 3.0) / 100
-        sl_pct  = opp["stop_loss_pct"] or 0.03
-        rr      = round(tp_pct / sl_pct, 1)
+        pct    = min(RISK_PCT[user["risk_level"]], user["max_position_pct"])
+        tp_pct = (opp["expected_return_pct"] or 3.0) / 100
+        sl_pct = opp["stop_loss_pct"] or 0.03
+        rr     = round(tp_pct / sl_pct, 1)
 
         rationale = (
             f"{opp['summary']} "
-            f"Historical base rate: {int(opp.get('win_rate', 0)*100)}% win rate "
-            f"over {opp['backtest_sample_size']} similar setups. "
-            f"Expected return: ~{opp['expected_return_pct']}% over {opp.get('hold_days',5)} days. "
-            f"Suggested position: {int(pct*100)}% of account. "
-            f"Stop: {int(sl_pct*100)}%. Risk/reward: 1:{rr}. "
-            f"Confidence: {int(opp['confidence']*100)}%."
+            f"Win rate: {opp.get('win_rate', '?')}% over similar setups. "
+            f"Expected: ~{opp['expected_return_pct']}% in {opp.get('hold_days', 5)} days. "
+            f"Position: {int(pct*100)}% of account. "
+            f"Stop: {int(sl_pct*100)}%. R/R: 1:{rr}. "
+            f"Confidence: {int(opp['model_confidence']*100)}%."
         )
         saved = await db.fetchrow(
             """INSERT INTO strategies
-               (user_id,opportunity_id,sizing_pct,stop_loss_pct,take_profit_pct,
-                rationale,expires_at)
-               VALUES ($1,$2,$3,$4,$5,$6,NOW()+INTERVAL '4 hours') RETURNING *""",
-            [user["id"], opp["id"], pct, sl_pct, tp_pct, rationale]
+               (user_id, opportunity_id, sizing_pct, stop_loss_pct,
+                take_profit_pct, rationale, expires_at)
+               VALUES ($1,$2,$3,$4,$5,$6, NOW()+INTERVAL '4 hours') RETURNING *""",
+            user["id"], opp["id"], pct, sl_pct, tp_pct, rationale
         )
-        await redis.publish(f"strategies:{user['id']}", json.dumps(dict(saved)))
+        await redis.publish(f"strategies:{user['id']}", json.dumps(dict(saved), default=str))
 ```
 
 ---
 
-## Next.js: key API routes
+## Next.js structure and API routes
 
-### SSE stream — `app/api/strategies/stream/route.ts`
+```
+src/web/
+├── app/
+│   ├── layout.tsx                      # root — fonts, auth check, redirect logic
+│   ├── page.tsx                        # redirects: no profile → /onboarding, else → /
+│   ├── onboarding/page.tsx             # multi-step: risk → markets → alpaca → done
+│   ├── auth/signin/page.tsx            # custom sign-in page
+│   └── (dashboard)/                   # layout group — sidebar nav, auth guard
+│       ├── layout.tsx
+│       ├── page.tsx                    # strategy inbox (default route)
+│       ├── correlator/page.tsx         # live signal feed + pipeline status
+│       ├── chart/page.tsx              # OHLCV + technicals + backtest markers
+│       ├── backtests/page.tsx          # backtest explorer table
+│       ├── trades/page.tsx             # trade history + P&L
+│       └── settings/page.tsx          # risk, markets, alpaca, subscriptions
+├── api/
+│   ├── auth/[...nextauth]/route.ts
+│   ├── signals/route.ts               # GET — user's signals, last 1h
+│   ├── strategies/
+│   │   ├── route.ts                   # GET list, PATCH dismiss
+│   │   └── stream/route.ts            # GET SSE stream (nodejs runtime)
+│   ├── trades/route.ts                # POST — execute via Alpaca
+│   ├── backtests/route.ts             # GET — backtest history
+│   ├── history/[symbol]/route.ts      # GET — OHLCV + technicals from TimescaleDB
+│   └── subscriptions/route.ts         # GET/POST/DELETE
+├── lib/
+│   ├── db.ts                          # pg Pool → postgres app DB
+│   ├── tsdb.ts                        # pg Pool → timescaledb
+│   ├── redis.ts                       # ioredis singleton
+│   ├── auth.ts                        # next-auth config
+│   └── alpaca.ts                      # alpaca SDK wrapper
+├── hooks/
+│   ├── useStrategyStream.ts           # SSE with auto-reconnect, 5s retry
+│   ├── useAlpacaAccount.ts            # polls /api/account for equity
+│   └── useCountdown.ts                # strategy expiry timer
+└── components/
+    ├── layout/NavSidebar.tsx
+    ├── strategy/
+    │   ├── StrategyCard.tsx
+    │   ├── StrategyDetail.tsx
+    │   ├── ConfirmFooter.tsx           # 3-second hold-to-confirm
+    │   ├── BacktestStats.tsx           # always shows disclaimer
+    │   ├── SignalList.tsx
+    │   ├── SizingBreakdown.tsx
+    │   └── MacroGrid.tsx
+    ├── correlator/
+    │   ├── SignalTable.tsx
+    │   ├── PipelineSteps.tsx
+    │   └── SourceHealth.tsx
+    ├── chart/PriceChart.tsx
+    ├── backtest/BacktestTable.tsx
+    ├── trades/
+    │   ├── AccountSummary.tsx
+    │   └── TradesTable.tsx
+    └── ui/
+        ├── Badge.tsx
+        ├── StatCell.tsx
+        ├── SectionLabel.tsx
+        ├── LiveDot.tsx
+        ├── Skeleton.tsx
+        └── Toast.tsx
+```
 
-```ts
-import { auth } from "@/lib/auth"
-import { getRedis } from "@/lib/redis"
+### SSE stream route
 
+```typescript
+// app/api/strategies/stream/route.ts
 export const runtime = "nodejs"
 
 export async function GET(req: Request) {
@@ -839,13 +1154,10 @@ export async function GET(req: Request) {
 }
 ```
 
-### Trade execution — `app/api/trades/route.ts`
+### Trade execution route
 
-```ts
-import { auth } from "@/lib/auth"
-import { db } from "@/lib/db"
-import { getAlpaca } from "@/lib/alpaca"
-
+```typescript
+// app/api/trades/route.ts
 export async function POST(req: Request) {
   const session = await auth()
   if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
@@ -853,13 +1165,17 @@ export async function POST(req: Request) {
   const { strategy_id, confirmed } = await req.json()
   if (!confirmed) return Response.json({ error: "explicit confirmation required" }, { status: 400 })
 
+  // idempotency
   const dup = await db.query(
     "SELECT id FROM trades WHERE strategy_id=$1 AND user_id=$2 AND status!='rejected'",
     [strategy_id, session.user.id]
   )
   if (dup.rows.length) return Response.json({ error: "already submitted" }, { status: 409 })
 
-  const strat   = (await db.query("SELECT s.*, o.tickers, o.action FROM strategies s JOIN opportunities o ON o.id=s.opportunity_id WHERE s.id=$1", [strategy_id])).rows[0]
+  const strat   = (await db.query(
+    "SELECT s.*, o.tickers, o.action FROM strategies s JOIN opportunities o ON o.id=s.opportunity_id WHERE s.id=$1",
+    [strategy_id]
+  )).rows[0]
   const user    = (await db.query("SELECT * FROM users WHERE id=$1", [session.user.id])).rows[0]
   const alpaca  = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
   const account = await alpaca.getAccount()
@@ -870,81 +1186,23 @@ export async function POST(req: Request) {
   const price   = parseFloat(quote.ap)
   const qty     = Math.floor(sizing / price)
 
-  if (qty < 1) return Response.json({ error: "position too small for account size" }, { status: 422 })
+  if (qty < 1) return Response.json({ error: "position too small" }, { status: 422 })
 
   const order = await alpaca.createOrder({
-    symbol, qty, side: strat.action === "sell" ? "sell" : "buy",
-    type: "market", time_in_force: "day",
+    symbol, qty,
+    side: strat.action === "sell" ? "sell" : "buy",
+    type: "market",
+    time_in_force: "day",
   })
 
   await db.query(
-    `INSERT INTO trades (user_id,strategy_id,alpaca_order_id,symbol,side,qty,status,is_paper)
-     VALUES ($1,$2,$3,$4,$5,$6,'submitted',$7)`,
+    "INSERT INTO trades (user_id,strategy_id,alpaca_order_id,symbol,side,qty,status,is_paper) VALUES ($1,$2,$3,$4,$5,$6,'submitted',$7)",
     [session.user.id, strategy_id, order.id, symbol, order.side, qty, user.is_paper]
   )
   await db.query("UPDATE strategies SET status='executed' WHERE id=$1", [strategy_id])
 
   return Response.json({ order_id: order.id, qty, estimated_cost: qty * price })
 }
-```
-
-### Historical data for charts — `app/api/history/[symbol]/route.ts`
-
-```ts
-import { tsdb } from "@/lib/tsdb"
-import { auth } from "@/lib/auth"
-
-export async function GET(req: Request, { params }: { params: { symbol: string } }) {
-  const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
-
-  const { searchParams } = new URL(req.url)
-  const days     = parseInt(searchParams.get("days") ?? "90")
-  const interval = searchParams.get("interval") ?? "1d"
-
-  const result = await tsdb.query(
-    `SELECT o.time, o.open, o.high, o.low, o.close, o.volume,
-            t.rsi_14, t.macd, t.macd_signal, t.bb_upper, t.bb_lower, t.atr_14
-     FROM ohlcv o
-     LEFT JOIN technicals t USING (time, symbol, interval)
-     WHERE o.symbol=$1 AND o.interval=$2
-       AND o.time > NOW() - ($3 || ' days')::interval
-     ORDER BY o.time ASC`,
-    [params.symbol, interval, days]
-  )
-  return Response.json(result.rows)
-}
-```
-
----
-
-## lib/ clients
-
-```ts
-// lib/db.ts
-import { Pool } from "pg"
-export const db = new Pool({ connectionString: process.env.DATABASE_URL })
-
-// lib/tsdb.ts
-import { Pool } from "pg"
-export const tsdb = new Pool({ connectionString: process.env.TIMESCALE_URL })
-
-// lib/redis.ts
-import Redis from "ioredis"
-let client: Redis
-export const getRedis = () => {
-  if (!client) client = new Redis(process.env.REDIS_URL!)
-  return client
-}
-
-// lib/alpaca.ts
-import Alpaca from "@alpacahq/alpaca-trade-api"
-export const getAlpaca = (paper: boolean, keyId?: string, secret?: string) =>
-  new Alpaca({
-    keyId:     keyId  ?? process.env.ALPACA_KEY_ID!,
-    secretKey: secret ?? process.env.ALPACA_SECRET_KEY!,
-    paper,
-  })
 ```
 
 ---
@@ -961,8 +1219,8 @@ NEXTAUTH_URL=http://localhost:3000
 ALPACA_KEY_ID=
 ALPACA_SECRET_KEY=
 
-# env/python.env (all Python services share this)
-KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+# env/python.env (all Python services)
+KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/eventedge
 TIMESCALE_URL=postgresql://postgres:postgres@timescale:5432/market_history
 REDIS_URL=redis://redis:6379
@@ -972,6 +1230,7 @@ FINNHUB_API_KEY=
 FRED_API_KEY=
 LOG_LEVEL=info
 LOG_FORMAT=json
+DEV_MODE=true
 ```
 
 ---
@@ -991,6 +1250,9 @@ dependencies = [
   "pandas-ta>=0.3",
   "vectorbt>=0.26",
   "fredapi>=0.5",
+  "xgboost>=2.0",
+  "shap>=0.44",
+  "scikit-learn>=1.4",
   "pydantic>=2.0",
   "structlog>=24.0",
   "prometheus-client>=0.20",
@@ -999,899 +1261,206 @@ dependencies = [
 
 ---
 
-## Full signal pipeline — end to end
+## Directory layout
 
 ```
-1.  producer polls API → publishes raw event to Kafka raw.*
-
-2.  consumer reads raw event → runs detection algorithm
-      → if signal: write to signals table, publish signal ID to Redis
-
-3.  correlator wakes on Redis "new_signal" message
-      → fetches signal from DB
-
-4.  TIME-WINDOW GATE: need 2+ sources in last 15 min
-      → fewer than 2 sources: DROP silently
-
-5.  BACKTEST GATE: run vectorbt against 2 years of TimescaleDB history
-      → sample_size < 20: DROP and log reason to backtest_results
-      → win_rate < 45%:   DROP and log reason to backtest_results
-
-6.  embed signal → store vector in signals.embedding
-
-7.  pgvector semantic search:
-      → top-5 similar past signals
-      → top-3 similar past opportunities with their outcomes
-
-8.  TimescaleDB macro snapshot: FEDFUNDS, VIX, WTI, CPI, 10Y yield, USD
-
-9.  Claude API call with:
-      recent signals + backtest stats + similar past signals
-      + similar past opportunities + macro context
-
-10. if not is_opportunity or confidence < 0.60: DROP
-
-11. save opportunity with embedding
-    save backtest_result linked to opportunity
-
-12. fan_out:
-      find users subscribed to any ticker in opportunity
-      build per-user strategy (sized to risk_level, stop/take_profit from backtest)
-      save strategy
-      publish to Redis strategies:{user_id}
-
-13. Next.js SSE route delivers strategy to connected browser in real time
-
-14. user reviews:
-      summary, thesis, backtest stats (win_rate, sample_size, expectancy),
-      expected return, stop loss, risk/reward ratio, confidence, macro notes
-
-15. user confirms (explicit tap) → POST /api/trades
-      → idempotency check
-      → fetch Alpaca account equity → size position
-      → create market order via Alpaca
-      → write trade record
-
-16. position tracked in positions table
-    P&L computed on close
+eventedge-ai/
+├── src/
+│   ├── event_detectors/               # DUMB — fetch raw, publish to Redpanda
+│   │   ├── polymarket_producer/
+│   │   ├── news_producer/
+│   │   └── analytics_producer/
+│   ├── event_processors/              # SMART — detection logic lives here
+│   │   ├── polymarket_consumer/
+│   │   │   ├── consumer.py
+│   │   │   └── conviction.py          # your existing algorithm, moved here
+│   │   ├── news_consumer/
+│   │   │   ├── consumer.py
+│   │   │   └── signal_detector.py     # your existing algorithm, moved here
+│   │   └── analytics_consumer/
+│   │       ├── consumer.py
+│   │       └── signal_detector.py
+│   ├── feature_store/
+│   │   ├── builder.py                 # hourly snapshot writer
+│   │   ├── label_filler.py            # nightly forward return labels
+│   │   ├── normalizer.py              # z-score at query time
+│   │   └── scheduler.py              # cron wrapper
+│   ├── historical/
+│   │   ├── ingestor.py                # nightly OHLCV + FRED pull
+│   │   └── sources/
+│   │       ├── yfinance_source.py
+│   │       └── fred_source.py
+│   ├── ml/
+│   │   ├── train.py                   # run locally, NOT in Docker
+│   │   └── rule_scorer.py             # placeholder until model trained
+│   ├── ai_correlator/
+│   │   ├── correlator.py
+│   │   ├── fan_out.py
+│   │   └── prompt.py
+│   ├── observability/
+│   └── web/                           # Next.js app
+│       └── (see Next.js structure above)
+├── db/
+│   ├── app_schema.sql
+│   └── history_schema.sql
+├── models/                            # gitignored — populated by train.py
+│   ├── scoring_model.json
+│   └── shap_explainer.pkl
+├── pgadmin/
+│   └── servers.json
+├── env/
+│   ├── nextjs.env
+│   └── python.env
+├── observability/
+│   └── (prometheus + grafana configs)
+├── scripts/
+│   ├── seed_subscriptions.py
+│   └── seed_stock_subscriptions.py
+├── docker-compose.yml
+├── docker-compose.monitoring.yml      # optional — grafana + prometheus
+├── Dockerfile                         # Python 3.11-slim, all Python services
+├── pyproject.toml
+└── BUILD.md                           # phase-by-phase build order (see below)
 ```
 
 ---
 
-## Key design decisions
+## Build phases
 
-**Why two PostgreSQL instances instead of one?**
-TimescaleDB and pgvector are both PostgreSQL extensions but have different operational
-profiles. TimescaleDB is tuned for append-heavy time-series with aggressive compression
-and continuous aggregates. The app DB is tuned for relational lookups and vector search.
-Separating them lets each be tuned independently and keeps the schemas clean.
+Build strictly in this order. Each phase produces something verifiable before the next begins.
+Do not skip phases. Do not build phase N+1 before phase N is confirmed working.
+
+### Phase 1 — Infrastructure (2 days)
+Goal: all services healthy, both databases initialized, pgAdmin connected to both.
+
+1. Write docker-compose.yml (use Redpanda, NOT Kafka or Zookeeper)
+2. Write db/app_schema.sql (PostgreSQL + pgvector)
+3. Write db/history_schema.sql (TimescaleDB with hypertables and compression)
+4. Write pgadmin/servers.json (pre-connects both databases)
+5. docker compose up -d
+6. Verify: pgAdmin at localhost:5050 shows both databases, all tables exist
+7. Verify: redpanda-console at localhost:8080 is healthy
+
+### Phase 2 — Data ingest (3 days)
+Goal: real data flowing from all three sources into raw_* tables.
+
+1. Build polymarket-producer (polls Polymarket API, publishes to raw.polymarket)
+2. Build polymarket-consumer (reads raw.polymarket, runs conviction.py, writes raw_polymarket + signals)
+3. Build news-producer + news-consumer (same pattern, raw.news topic)
+4. Build analytics-producer + analytics-consumer (same pattern, raw.analytics topic)
+5. Verify: rows appearing in raw_polymarket, raw_news, raw_ohlcv in pgAdmin
+6. Verify: rows appearing in signals table when thresholds crossed
+
+### Phase 3 — Feature store (2 days)
+Goal: features table populated with real data, labels filling nightly.
+
+1. Build historical ingestor — pulls 2 years OHLCV and FRED macro
+2. Build feature builder — hourly snapshots, as-of queries, no lookahead
+3. Build label filler — nightly job, forward_return_5d for rows >= 5 trading days old
+4. Run historical ingestor once manually to backfill
+5. Verify: features table has rows with real values for each symbol
+6. Verify: label_filled_at populated for historical rows
+
+### Phase 4 — AI correlator with rule scorer (2 days)
+Goal: full pipeline working end-to-end, strategies appearing in browser.
+
+1. Build ai-correlator using rule_scorer.py (not XGBoost yet)
+2. Build fan_out.py — per-user strategy sizing and Redis publish
+3. Build Next.js skeleton — strategy inbox page only
+4. Build SSE stream route (app/api/strategies/stream/route.ts)
+5. Build trade execution route (app/api/trades/route.ts)
+6. Wire Alpaca paper trading
+7. Verify: signal fires → correlator runs → strategy appears in browser → paper order executes
+
+### Phase 5 — ML model (3 days)
+Goal: XGBoost model replacing rule scorer with real historical predictions.
+
+1. Run src/ml/train.py locally (needs Phase 3 complete with enough labeled data)
+2. Verify models/scoring_model.json and shap_explainer.pkl exist
+3. Mount models/ into ai-correlator container (already in docker-compose.yml)
+4. Swap rule_scorer import for xgboost model in correlator.py
+5. Verify: SHAP values appearing in top_features column of opportunities table
+6. Verify: Claude narrative references specific features from SHAP output
+
+### Phase 6 — Full frontend (5 days)
+Goal: all six pages built and working per design system.
+
+1. Design system: globals.css with all CSS variables, DM Sans + DM Mono fonts
+2. NavSidebar component
+3. Strategy inbox — full detail panel, backtest stats, sizing breakdown, hold-to-confirm
+4. Signal correlator — signal table, pipeline steps, source health
+5. Price chart — Recharts OHLCV, RSI/MACD subcharts, backtest entry markers
+6. Backtest explorer — sortable table, expandable row detail
+7. Trade history — open positions, closed trades, P&L
+8. Settings — risk selector, market selector, Alpaca connect, subscription manager
+9. Onboarding flow — 5 steps, saves progress at each step
+
+### Phase 7 — Hypothesis library (3 days)
+Goal: named hypotheses stored, validated, and driving predictions.
+
+1. hypotheses table already in schema — write the initial 10-15 hypothesis objects
+2. Build hypothesis matching in correlator (match_hypothesis function)
+3. Build Claude hypothesis authoring prompt (natural language → hypothesis JSON)
+4. Build backtester (vectorbt, validates hypotheses against feature store)
+5. Retire rule_scorer.py entirely — all scoring via XGBoost + hypotheses
+6. Set up weekly model retrain as a cron job (local Python or VPS)
+
+---
+
+## Key design decisions — why things are the way they are
+
+**Redpanda instead of Kafka**
+Redpanda is Kafka-protocol-compatible. Zero code changes to producers or consumers.
+Runs as a single binary with no Zookeeper. 512 MB vs ~1.2 GB. Native ARM image.
+This was a straightforward upgrade with no downsides for this use case.
+
+**Detection in consumers, not producers**
+Producers are stateless fetchers — trivially restartable, no state to lose.
+Consumers have the full event history context needed to make detection decisions.
+State (ConvictionState per symbol) lives in the consumer process, not the producer.
+This separation means producers can be restarted without losing detection state.
+
+**Two databases instead of one**
+TimescaleDB is optimized for time-series append and range scans with compression.
+PostgreSQL app DB is optimized for relational lookups, foreign keys, vector search.
+Different access patterns, different tuning, different backup strategies.
 pgAdmin connects to both from a single UI at localhost:5050.
 
-**Why validate with a backtester before calling Claude?**
-Claude cannot know historical win rates. Sending it a signal cluster with a 35% historical
-win rate and asking if there's an opportunity produces confident-sounding nonsense.
-The backtester runs first and supplies hard statistics. The prompt then instructs Claude
-to anchor its confidence to those statistics — win_rate < 50% caps confidence at 0.65.
-
-**Why pgvector instead of a dedicated vector DB (Qdrant/Pinecone)?**
-No new service, SDK, auth, or backup strategy. pgvector with HNSW handles millions of
-vectors at sub-5ms latency — more than sufficient at this signal volume. A dedicated
-vector DB earns its place at 100M+ vectors or when you need fine-grained access control
-on the vector layer. You don't need that here.
-
-**Why OpenAI embeddings and not a local model?**
-text-embedding-3-small costs $0.02/1M tokens and produces 1536-dimensional embeddings.
-Signal text volume is tiny (tens of KB per day). This costs cents per month and produces
-meaningfully better semantic similarity than anything runnable locally without a GPU.
-
-**On expected returns.**
-expected_return_pct in every opportunity is sourced directly from backtest avg_return_pct.
-The prompt explicitly prohibits Claude from fabricating this number. The UI must display
-it alongside sample_size, win_rate, and max_drawdown so users understand the statistical
-basis. Past performance does not guarantee future results. The system makes this clear.
-
-**On the backtest thresholds.**
-sample_size >= 20 and win_rate >= 45% are conservative minimums. Below 20 occurrences
-the win rate has too much variance to be actionable. Below 45% there is no measurable
-edge. These are configurable per-environment and should be tuned as real trade data
-accumulates in the positions and trades tables.
-
-Frontend:
-
-
-
-# eventedge-ai — frontend specification
-## Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Framework | Next.js 14 (App Router) |
-| Language | TypeScript 5 |
-| Styling | Tailwind CSS v3 |
-| Components | shadcn/ui (base primitives only) |
-| Charts | Recharts |
-| Fonts | DM Sans (body) + DM Mono (numbers, code, tickers) |
-| Auth | NextAuth.js v5 (Credentials provider) |
-| State | React built-in (useState, useReducer, useContext) — no external store |
-| Live data | EventSource (SSE) via custom hooks |
-| HTTP | Native fetch in Server Components, SWR for client-side polling |
-| Forms | React Hook Form + Zod |
-| Animations | Tailwind transitions + CSS keyframes only |
-
----
-
-## Design system
-
-### Theme
-
-Dark-first. One light mode toggle in settings but dark is the default and primary.
-The aesthetic is precise, data-dense, authoritative — quantitative terminal meets modern SaaS.
-Never generic. Numbers always in DM Mono. Labels always uppercase with letter-spacing.
-
-### Color tokens (CSS variables in globals.css)
-
-```css
-:root {
-  --bg:        #0a0c0f;   /* page background */
-  --bg1:       #0f1217;   /* surface (cards, panels) */
-  --bg2:       #151a21;   /* elevated surface */
-  --bg3:       #1c2330;   /* hover state, active nav */
-  --border:    #1e2835;   /* default border */
-  --border2:   #263041;   /* hover border */
-  --text:      #e2e8f0;   /* primary text */
-  --muted:     #64748b;   /* secondary text */
-  --dim:       #334155;   /* labels, tertiary */
-
-  --green:     #22c55e;
-  --green-bg:  rgba(34,197,94,0.07);
-  --green-dim: #14532d;
-  --red:       #ef4444;
-  --red-bg:    rgba(239,68,68,0.07);
-  --amber:     #f59e0b;
-  --amber-bg:  rgba(245,158,11,0.07);
-  --blue:      #3b82f6;
-  --blue-bg:   rgba(59,130,246,0.07);
-  --purple:    #a78bfa;
-  --purple-bg: rgba(167,139,250,0.08);
-}
-```
-
-### Typography rules
-
-- Body text: DM Sans, 13px, weight 400
-- Headings: DM Sans, weight 600, letter-spacing -0.01em
-- All numbers, tickers, prices, scores, timestamps: DM Mono
-- All column labels and section labels: 10px, uppercase, letter-spacing 0.06em, color `--dim`
-- Never use Inter, Roboto, or system fonts
-
-### Spacing
-
-- Page padding: 20px horizontal
-- Card padding: 14px
-- Section gap: 14px
-- Inline gap: 8px
-
-### Border radius
-
-- Cards: 10px
-- Badges / chips: 4px
-- Buttons: 8px
-- Cells / small elements: 6px
-
-### Status colors
-
-| State | Color | Usage |
-|-------|-------|-------|
-| Buy / positive | `--green` | Action badges, positive P&L, passed backtests |
-| Sell / negative | `--red` | Action badges, losses, failed gates |
-| Watch / neutral | `--amber` | Watch signals, expiry warnings, pending states |
-| Info / analytics | `--blue` | Analytics source chips, info states |
-| Polymarket | `--purple` | Polymarket source chips only |
-| Dropped | opacity 0.45 on row + `--red` label | Any dropped/filtered signal |
-
-### Reusable component patterns
-
-**Action badge** — `BUY` / `SELL` / `WATCH`
-Monospace, 10px, 3px/7px padding, 4px radius, colored bg + border matching action color.
-
-**Source chip** — `POLYMARKET` / `NEWS` / `ANALYTICS`
-Monospace, 10px, colored per source table above.
-
-**Stat cell** — label + value pair
-Label: 10px uppercase dim. Value: DM Mono 12-16px depending on context.
-
-**Live dot** — 6px circle, `--green`, CSS pulse animation at 2s.
-
-**Pill** — small outlined label for mode indicators (PAPER MODE, 3 sources active).
-Monospace 10px, `--border2` border, `--muted` text.
-
-**Section label** — 10px, uppercase, `--dim`, letter-spacing 0.08em, font-weight 600.
-Always followed by 8px margin before content.
-
-**Card accent bar** — 2px full-width colored strip at top of strategy cards.
-Color matches action (green=buy, red=sell, amber=watch).
-
----
-
-## Layout
-
-### Shell
-
-Two-column grid: `52px nav | 1fr content`.
-Nav is a narrow icon sidebar, always visible, never collapses.
-Content area fills the remaining width, height 100vh, overflow hidden (each panel scrolls internally).
-
-### Nav sidebar
-
-52px wide, `--bg1` background, `--border` right border.
-Top: 32px logo mark (green rounded square with chart icon).
-Then icon buttons (36px × 36px, 8px radius):
-- Strategies (bar chart icon) — active color `--green`
-- Signal correlator (radio wave icon) — active color `--blue`
-- Price chart (waveform icon) — active color `--blue`
-- Backtests (line chart icon) — active color `--blue`
-- separator line
-- Trade history (monitor icon) — active color `--blue`
-- Settings (gear icon) — active color `--muted`
-
-Active nav item: `--bg3` background, icon in page accent color.
-Hover: `--bg3` background, icon in `--text`.
-Tooltips on hover (title attribute sufficient).
-
-### Content area patterns
-
-Most pages use one of two layouts:
-
-**Two-panel horizontal** — `1fr | fixed-width right panel`
-Used by: strategy inbox (380px right), signal correlator (320px right), price chart (300px right).
-Left panel: list / feed / chart. Right panel: detail or status.
-`--border` vertical separator between panels.
-
-**Single column with topbar**
-Used by: trade history, backtests, settings, onboarding.
-
----
-
-## Pages
-
-### 1. Onboarding (`/onboarding`)
-
-First screen for new users. Only shown if user has no profile set up.
-Multi-step flow, no sidebar, centered card layout, full-page dark background.
-
-**Step 1 — Welcome**
-Headline: "eventedge" in large DM Mono, subtitle explaining what the system does in one sentence.
-Single CTA: "Get started".
-
-**Step 2 — Risk profile**
-Three cards in a row: Conservative / Moderate / Aggressive.
-Each card shows:
-- Risk label in large text
-- Max position size (1% / 3% / 6% of account per trade)
-- Short description of who this suits
-- Example: what a $10,000 account would risk per trade
-Cards are selectable — selected state has `--green` border and subtle green background tint.
-User picks one. "Continue" button.
-
-**Step 3 — Markets**
-Multi-select grid of market categories: Oil & Energy, US Equities, Crypto, Rates & Macro, Commodities, FX.
-Each is a toggleable chip. User picks one or more.
-Helper text: "We'll only surface opportunities in your selected markets."
-"Continue" button.
-
-**Step 4 — Alpaca connection**
-Two inputs: API Key ID, Secret Key.
-Toggle: Paper trading / Live trading. Paper is default and highlighted as recommended.
-Explanatory note: "Your keys are stored encrypted and only used to submit orders on your behalf. We never custody funds."
-"Test connection" button — calls Alpaca API, shows account equity on success.
-On success: green checkmark + "Connected — account equity: $XX,XXX". "Finish setup" button.
-On failure: red error with exact Alpaca error message.
-
-**Step 5 — Complete**
-Confirmation screen: "You're all set."
-Summary of their choices. "Go to strategies" button → navigates to `/`.
-
-Progress indicator: dots or step numbers at top of each step (1 of 5).
-All steps persist to `users` table immediately on "Continue" — no data lost on refresh.
-
----
-
-### 2. Strategy inbox (`/`) — default route
-
-The primary screen. Where users spend most of their time.
-
-**Layout**: Two-panel horizontal. Left: strategy card feed. Right: strategy detail panel.
-
-**Topbar** (left panel)
-- Live dot + "Strategy inbox" title
-- Right side: PAPER MODE pill (green if paper, amber if live) + "N sources active" pill
-
-**Filter tabs** below topbar
-Tabs: All | Pending | Executed | Dismissed | Dropped
-Each tab shows a count badge. Dropped tab is faded relative to others — it's audit info, not primary.
-
-**Strategy card feed** (left panel, scrollable)
-
-Each card contains:
-
-Top accent bar — 2px, colored by action (green/red/amber).
-
-Card header row:
-- Action badge (BUY / SELL / WATCH)
-- Ticker symbols in DM Mono (e.g. "USO / XOM")
-- Confidence score right-aligned ("conf 84%")
-
-Summary text — 2-3 line plain English summary from Claude. 12px, `--muted`.
-
-Stats row (4 cells, separated by `--border` lines):
-- EXP. RETURN: e.g. "+4.2%" in green
-- WIN RATE: e.g. "68%"
-- STOP LOSS: e.g. "−3%" in red
-- HOLD: e.g. "5d" in muted
-
-Footer row:
-- Source chips (POLYMARKET, NEWS, ANALYTICS — whichever contributed)
-- Timestamp right-aligned in DM Mono
-
-Card states:
-- Default: `--bg1` background
-- Hover: `--bg2` background, `--border2` border
-- Selected: `--bg2` background, `--green` border
-- New (just arrived via SSE): slide-in animation from top + `rgba(34,197,94,0.3)` border glow for 3s
-- Executed: opacity 0.6, no hover effect, shows fill price and P&L instead of expected stats
-- Dropped: opacity 0.45, no cursor pointer, shows drop reason right-aligned in red mono
-
-**Strategy detail panel** (right panel, fixed)
-
-Shown when a card is selected. Defaults to the first pending card on load.
-If no strategies exist yet, shows an empty state: "Waiting for signals. The system is actively monitoring your markets."
-
-Header:
-- Large ticker in DM Mono (20px, weight 600)
-- Subtitle: "Full name · Action · Paper/Live mode"
-
-Scrollable body sections (each preceded by a section label):
-
-**Thesis section**
-Claude's thesis text, 12px, `--muted`, line-height 1.7.
-Left border 2px `--border2` (blockquote style).
-Below thesis: "Historical context" in smaller text if Claude found a similar past opportunity.
-
-**Backtest results section**
-2×2 grid of stat cells:
-- Win rate (green if ≥60%, amber if 45-60%)
-- Avg return (green)
-- Sample size (muted — just a number)
-- Max drawdown (red)
-Below grid: disclaimer note with amber left border — "Historical results do not guarantee future returns. This is a base rate, not a prediction."
-
-**Contributing signals section**
-List of rows, each showing:
-- Source label (DM Mono, 60px min-width, source color)
-- Signal description
-- Score right-aligned (DM Mono, muted)
-
-**Position sizing section**
-List of label/value rows:
-- Account equity (from Alpaca)
-- Risk allocation (% × equity = dollar amount)
-- Estimated shares / units (dollar amount ÷ current price)
-- Stop loss price (exact dollar amount + "max loss $X")
-- Take profit price (exact dollar amount + "expected gain $X")
-- Risk / reward ratio (e.g. "1 : 1.4") — green if ≥1.5, amber if 1-1.5, red if <1
-
-**Macro context section**
-3-column grid of macro cells: WTI CRUDE, VIX, FED FUNDS, 10Y YIELD, USD INDEX, CPI YoY.
-Each cell: label (9px uppercase dim) + value (DM Mono 11px).
-
-**Confirm footer** (sticky at bottom of right panel)
-
-Expiry row: clock icon + "Strategy expires in Xh Ym" — time in amber DM Mono.
-Updates every minute via setInterval.
-
-Two buttons side by side (1fr : 2fr grid):
-- Dismiss: ghost style, `--bg3` background
-- Execute on Alpaca: primary CTA
-
-Execute button behavior:
-- Paper mode: blue background, label "Execute on Alpaca (paper)"
-- Live mode: green background, label "Execute on Alpaca (LIVE)"
-- On first click: changes to "Hold to confirm (3s)..." and starts a 3-second countdown
-- Each second the label updates: "Hold to confirm (2s)...", "Hold to confirm (1s)..."
-- If user clicks elsewhere during countdown: resets to original state
-- After 3 seconds: label becomes "✓ Submitted to Alpaca", button disabled, background darkens
-- 3 seconds later: resets (in case of error) or card moves to Executed state
-
-On dismiss: card moves to Dismissed tab, detail panel shows next pending card.
-
----
-
-### 3. Signal correlator (`/correlator`)
-
-Where power users monitor the raw pipeline. Shows every signal that fired, its journey through the gates, and why it was or wasn't escalated.
-
-**Layout**: Two-panel horizontal. Left: signal feed table. Right: pipeline status panel.
-
-**Topbar**
-- Live dot + "Signal correlator"
-- Right side: "today: N signals", "N escalated", "N dropped" pills
-
-**Stats bar** (4 cells, full width, below topbar)
-- Signals today (+ delta vs yesterday)
-- Escalation rate % (green)
-- Backtest drops count (red)
-- Avg confidence of escalated signals
-
-**Filter row** (below stats bar)
-Two filter groups:
-- SOURCE: ALL | POLY | NEWS | ANA
-- STATUS: ALL | ESCALATED | DROPPED | WATCHING | PENDING
-Toggle buttons, multiple can be active.
-
-**Signal feed table** (left panel, scrollable)
-
-Sticky header row with column labels:
-SOURCE | TYPE | SYMBOL / DETAIL | SCORE | STATUS | PIPELINE | TIME
-
-Each data row:
-- SOURCE: colored source label in DM Mono
-- TYPE: signal type (conviction shift, hotness, volume spike, rsi extreme, momentum, options unusual)
-- SYMBOL / DETAIL: ticker + brief detail (e.g. "USO 3.2× 30d avg")
-- SCORE: DM Mono, colored (≥0.75 green, 0.50-0.74 amber, <0.50 muted)
-- STATUS: badge (ESCALATED green, DROPPED red, WATCHING amber, PENDING amber)
-- PIPELINE: short status of where in the pipeline this signal is or stopped
-  - "1 source" → didn't pass cross-source gate
-  - "backtest: N samples" → dropped at backtest, N is the sample count
-  - "win rate 41%" → dropped at backtest for low edge
-  - "Claude ✓" → made it through to opportunity
-  - "conf 0.52" → Claude returned below-threshold confidence
-- TIME: relative timestamp, DM Mono
-
-Dropped rows: opacity 0.45.
-Clicking a row updates the right panel with that signal's pipeline detail.
-
-**Pipeline status panel** (right panel)
-
-Header: "Correlator pipeline" + "Last signal: N seconds ago".
-
-**Current signal pipeline** — vertical step list
-Each step has:
-- Status dot (22px circle): done (green), failed (red), active (amber), idle (dim)
-- Step name (12px, weight 500)
-- Step detail (11px, muted)
-- Technical note below in DM Mono 10px dim
-
-Steps:
-1. Signal detected — N signals across N sources in 15-min window
-2. Backtest validation — N occurrences · N% win rate / OR: reason for drop
-3. Semantic search — N similar past signals found, top match info
-4. Claude correlation — confidence % · action · ticker / OR: below threshold
-5. Strategy delivered — N users notified · expires in Nh
-
-Steps after a failure point show as idle (dim dot, no detail).
-Vertical connector line between steps.
-
-**Source health section** (below pipeline)
-Four rows: POLYMARKET, FINNHUB, ANALYTICS, HIST. INGEST
-Each row: source name | status dot + "live"/"nightly" | last poll timestamp
-
----
-
-### 4. Price chart (`/chart`)
-
-For researching a ticker — OHLCV with technicals, plus backtest entry markers overlaid.
-
-**Layout**: Two-panel horizontal. Left: chart area. Right: ticker detail / indicator panel.
-
-**Topbar**
-Ticker search input (DM Mono, types ahead from subscriptions list).
-Interval selector: 1D | 1W | 1M | 3M | 1Y — pill buttons.
-Indicator toggles: RSI | MACD | BB — toggleable pills.
-
-**Chart area** (left panel)
-
-Primary chart: Recharts ComposedChart with OHLCV candlestick bars.
-Candlesticks: green fill for up bars, red fill for down bars. Thin wicks.
-X-axis: date labels, DM Mono 10px.
-Y-axis: price labels, DM Mono 10px, right-aligned.
-
-Volume bars at bottom of the main chart (20% of height), same colors as candles, opacity 0.4.
-
-Backtest entry markers: small vertical dashed lines at dates where the backtester found similar historical setups. Amber color, 1px dashed. On hover: tooltip showing "Backtest entry · +X% / −X% outcome".
-
-Indicator subcharts (shown below main chart if toggled, each ~20% height):
-- RSI: line chart, horizontal reference lines at 25 and 75 (dashed, dim). RSI line in blue. Background tint red when RSI>75, green when RSI<25.
-- MACD: MACD line in blue, signal line in amber, histogram bars (green positive, red negative).
-- Bollinger: upper and lower bands as area chart overlaid on main price chart (not a subchart). Fill between bands in very low opacity white.
-
-Crosshair: thin vertical + horizontal lines following cursor, DM Mono tooltip showing date, OHLCV values, and active indicator values.
-
-**Ticker detail panel** (right panel)
-
-Current price in large DM Mono (20px).
-1D change in green or red.
-
-Latest indicator values:
-- RSI(14): value + "overbought" / "oversold" / "neutral" label
-- MACD: value + "bullish" / "bearish" crossover if recent
-- Volume: today vs 30-day avg (e.g. "1.4× avg")
-- ATR(14): average true range
-
-Recent signals for this ticker:
-List of the last 5 signals from any source for this symbol.
-Same format as signal correlator rows but condensed.
-
-Recent opportunities for this ticker:
-List of the last 3 opportunities that included this ticker.
-Shows action, confidence, date, outcome if closed.
-
----
-
-### 5. Backtest explorer (`/backtests`)
-
-For understanding system performance over time. Which signal types have the best edge.
-
-**Layout**: Single column with topbar.
-
-**Topbar**
-Title: "Backtest explorer".
-Filter: date range picker (last 7d / 30d / 90d / all time).
-Filter: passed only / dropped only / all.
-
-**Summary stats row** (4 cards across top)
-- Total backtests run
-- Pass rate % (green)
-- Best performing signal type (label + win rate)
-- Total dropped (insufficient edge)
-
-**Backtest results table**
-
-Columns:
-SIGNAL TYPES | SYMBOL | SAMPLE SIZE | WIN RATE | AVG RETURN | EXPECTANCY | SHARPE | MAX DD | PASSED | DATE
-
-- SIGNAL TYPES: comma-separated signal type names that formed this cluster
-- WIN RATE: colored (green ≥60%, amber 45-60%, red <45%)
-- AVG RETURN: green if positive
-- EXPECTANCY: green if positive, red if negative
-- SHARPE: muted number
-- MAX DD: red
-- PASSED: green "✓ PASS" or red "✗ DROP" badge
-- DATE: relative, DM Mono
-
-Clicking a row expands an inline detail panel showing:
-- Full signal list with scores
-- Entry dates found in history (list of dates)
-- Distribution of returns (simple text: "range: −8.2% to +12.4%, median +3.1%")
-- Claude opportunity if this backtest was escalated (linked)
-- Drop reason if not passed
-
-Sortable columns. Default sort: date descending.
-
----
-
-### 6. Trade history (`/trades`)
-
-Record of all orders submitted via Alpaca, paper and live.
-
-**Layout**: Single column.
-
-**Topbar**
-Title: "Trade history".
-Toggle: Paper | Live (switches which orders are shown).
-Date range filter.
-
-**Account summary bar** (shown when Alpaca connection is active)
-4 cells: Portfolio value | Cash | Day P&L | Total P&L (since account connection).
-All in DM Mono. Portfolio value large (18px). P&L green or red.
-
-**Open positions section**
-
-Table with columns:
-SYMBOL | SIDE | QTY | AVG COST | CURRENT PRICE | UNREALIZED P&L | UNREALIZED % | STRATEGY
-
-- UNREALIZED P&L: green or red
-- STRATEGY: links to the strategy card that generated this position
-
-**Closed trades section**
-
-Table with columns:
-SYMBOL | SIDE | QTY | ENTRY | EXIT | P&L | % RETURN | HOLD TIME | STRATEGY | DATE
-
-- P&L and % RETURN: green or red
-- Clicking a row shows a side panel with the full strategy that generated the trade,
-  the backtest result that validated it, and the opportunity thesis.
-
-**Empty state**
-"No trades yet. Execute a strategy from your inbox to see it here."
-
----
-
-### 7. Settings (`/settings`)
-
-**Layout**: Single column, max-width 640px, centered.
-
-Sections (each with a section label and a card):
-
-**Profile**
-- Email (read only)
-- Change password (opens inline form: current password, new password, confirm)
-
-**Risk profile**
-Same three-card selector as onboarding step 2.
-Current selection highlighted. "Save" button below.
-
-**Markets**
-Same multi-select chip grid as onboarding step 3.
-"Save" button below.
-
-**Alpaca connection**
-Shows current connection status (connected / disconnected).
-If connected: shows account type (paper/live), equity, last sync time. "Disconnect" button.
-If not: same Alpaca key form as onboarding step 4.
-Paper / Live toggle with clear warning on Live: "Live trading uses real money. Orders execute immediately."
-
-**Subscription management**
-Table of current subscriptions: SOURCE | SYMBOL | THRESHOLD | ADDED.
-"Remove" button per row.
-"Add subscription" inline form: source dropdown + symbol input + optional threshold override.
-
-**Notification preferences** (future — show as coming soon, disabled)
-Toggle rows for: Email on new strategy, Browser notification on new strategy.
-Shown but disabled with "Coming soon" label.
-
-**Danger zone**
-"Delete account" button — red outline, opens confirmation modal requiring typed confirmation.
-
----
-
-## Shared components
-
-### Empty states
-
-Each page has a contextual empty state when no data exists.
-Format: icon (SVG, 32px, `--dim`) + headline (14px, `--muted`) + optional sub-text (12px, `--dim`).
-No CTA buttons in empty states except onboarding completion.
-
-Examples:
-- Strategy inbox: "Waiting for signals. The system is monitoring your markets."
-- Signal correlator: "No signals yet today. Producers are running."
-- Trade history: "No trades yet. Execute a strategy from your inbox."
-- Backtests: "No backtest results yet. Signal clusters are needed first."
-
-### Loading states
-
-Each data section shows a skeleton loader (not a spinner) while fetching.
-Skeleton: same dimensions as the content it replaces, `--bg3` background, subtle pulse animation.
-Use CSS animation: `opacity: 0.5 → 1 → 0.5` at 1.5s loop.
-
-### Error states
-
-API errors show inline (not toast) in the section that failed.
-Format: red left border on a `--bg2` card, error message in `--muted`, retry button.
-
-### Toasts
-
-Used only for success confirmations:
-- "Strategy dismissed"
-- "Order submitted to Alpaca"
-- "Settings saved"
-
-Appear bottom-right. Auto-dismiss 3s. `--bg2` background, `--border2` border, no color coding (they're always positive — errors are inline).
-
-### Modals
-
-Used only for destructive actions (delete account, disconnect Alpaca).
-Dark overlay `rgba(0,0,0,0.7)`. Centered card, 400px max-width.
-Two buttons: cancel (ghost) + confirm (red for destructive).
-Never used for forms or information display — those are inline or in panels.
-
----
-
-## Data fetching patterns
-
-### Server components (Next.js App Router)
-
-Pages that don't need real-time updates fetch in Server Components:
-- `/backtests` — full backtest table
-- `/trades` — trade history
-- `/settings` — user profile, subscriptions
-
-Use `async` Server Component with direct DB query via `lib/db.ts`.
-
-### Client components with SWR
-
-Pages that need periodic refresh without SSE:
-- Price chart — polls `/api/history/[symbol]` every 60s
-- Signal correlator table — polls `/api/signals` every 15s
-
-```ts
-const { data, error } = useSWR('/api/signals', fetcher, { refreshInterval: 15000 })
-```
-
-### SSE hooks
-
-Real-time push used only for strategy inbox.
-
-```ts
-// hooks/useStrategyStream.ts
-export function useStrategyStream(): Strategy[] {
-  const [strategies, setStrategies] = useState<Strategy[]>([])
-
-  useEffect(() => {
-    let es: EventSource
-    let retry: ReturnType<typeof setTimeout>
-
-    const connect = () => {
-      es = new EventSource('/api/strategies/stream')
-      es.onmessage = (e) => {
-        const s: Strategy = JSON.parse(e.data)
-        setStrategies(prev => [s, ...prev].slice(0, 100))
-      }
-      es.onerror = () => {
-        es.close()
-        retry = setTimeout(connect, 5000)
-      }
-    }
-
-    connect()
-    return () => { es?.close(); clearTimeout(retry) }
-  }, [])
-
-  return strategies
-}
-```
-
-Auto-reconnects after 5s on disconnect. Caps at 100 strategies in memory.
-
----
-
-## Route structure
-
-```
-app/
-├── layout.tsx                      # root layout — fonts, CSS variables, auth check
-├── page.tsx                        # redirects to /onboarding if no profile, else /
-├── onboarding/
-│   └── page.tsx                    # multi-step onboarding (no sidebar)
-├── (dashboard)/                    # layout group — includes sidebar nav
-│   ├── layout.tsx                  # sidebar shell, auth guard
-│   ├── page.tsx                    # strategy inbox (default route)
-│   ├── correlator/
-│   │   └── page.tsx
-│   ├── chart/
-│   │   └── page.tsx
-│   ├── backtests/
-│   │   └── page.tsx
-│   ├── trades/
-│   │   └── page.tsx
-│   └── settings/
-│       └── page.tsx
-└── api/
-    ├── auth/[...nextauth]/route.ts
-    ├── signals/route.ts
-    ├── strategies/
-    │   ├── route.ts
-    │   └── stream/route.ts
-    ├── trades/route.ts
-    ├── backtests/route.ts
-    ├── history/[symbol]/route.ts
-    └── subscriptions/route.ts
-```
-
----
-
-## Auth flow
-
-NextAuth.js Credentials provider.
-Session strategy: JWT (no DB session table needed).
-`auth()` called in every API route and Server Component that needs the user ID.
-
-Protected routes: everything under `(dashboard)/`.
-Root layout checks session server-side and redirects to `/onboarding` or `/auth/signin`.
-
-Sign-in page: `/auth/signin` — custom page (not NextAuth default).
-Two inputs: email + password. No OAuth. No "forgot password" in v1.
-
-New user registration: `POST /api/auth/register` — creates user row, hashes password with bcrypt.
-
----
-
-## Environment variables (frontend-relevant)
-
-```bash
-NEXTAUTH_SECRET=
-NEXTAUTH_URL=http://localhost:3000
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/eventedge
-TIMESCALE_URL=postgresql://postgres:postgres@timescale:5432/market_history
-REDIS_URL=redis://redis:6379
-ALPACA_KEY_ID=                      # fallback if user hasn't set their own
-ALPACA_SECRET_KEY=
-```
-
----
-
-## Component file map
-
-```
-src/web/
-├── app/                            # routes (see above)
-├── components/
-│   ├── layout/
-│   │   ├── NavSidebar.tsx          # icon nav with tooltips
-│   │   └── Topbar.tsx              # reusable topbar with title + right slot
-│   ├── strategy/
-│   │   ├── StrategyCard.tsx        # card in the feed
-│   │   ├── StrategyDetail.tsx      # right panel detail view
-│   │   ├── ConfirmFooter.tsx       # expiry + hold-to-confirm buttons
-│   │   ├── BacktestStats.tsx       # 2×2 stat grid + disclaimer
-│   │   ├── SignalList.tsx          # contributing signals rows
-│   │   ├── SizingBreakdown.tsx     # position sizing rows
-│   │   └── MacroGrid.tsx           # 3-col macro snapshot
-│   ├── correlator/
-│   │   ├── SignalTable.tsx         # full signal feed table
-│   │   ├── PipelineSteps.tsx       # vertical pipeline status
-│   │   ├── SourceHealth.tsx        # 4-row source status
-│   │   └── StatsBar.tsx            # 4-cell summary bar
-│   ├── chart/
-│   │   ├── PriceChart.tsx          # Recharts OHLCV + overlays
-│   │   ├── IndicatorPanel.tsx      # RSI / MACD subchart
-│   │   ├── BacktestMarkers.tsx     # dashed vertical lines on chart
-│   │   └── TickerDetail.tsx        # right panel for chart page
-│   ├── backtest/
-│   │   ├── BacktestTable.tsx       # sortable results table
-│   │   └── BacktestRow.tsx         # expandable row detail
-│   ├── trades/
-│   │   ├── AccountSummary.tsx      # portfolio value + P&L bar
-│   │   ├── PositionsTable.tsx      # open positions
-│   │   └── ClosedTradesTable.tsx   # trade history
-│   ├── settings/
-│   │   ├── RiskSelector.tsx        # three-card risk picker (reused from onboarding)
-│   │   ├── MarketSelector.tsx      # chip grid (reused from onboarding)
-│   │   ├── AlpacaConnect.tsx       # key form + connection status
-│   │   └── SubscriptionManager.tsx # table + add form
-│   ├── onboarding/
-│   │   └── OnboardingFlow.tsx      # multi-step wrapper
-│   └── ui/
-│       ├── Badge.tsx               # action / source / status badges
-│       ├── StatCell.tsx            # label + value pair
-│       ├── SectionLabel.tsx        # uppercase dim label
-│       ├── LiveDot.tsx             # pulsing green dot
-│       ├── Pill.tsx                # outlined mode indicator
-│       ├── Skeleton.tsx            # loading skeleton
-│       ├── Toast.tsx               # bottom-right success toast
-│       └── Modal.tsx               # destructive action modal
-├── hooks/
-│   ├── useStrategyStream.ts        # SSE connection with auto-reconnect
-│   ├── useAlpacaAccount.ts         # fetches account equity from Alpaca
-│   └── useCountdown.ts             # strategy expiry countdown timer
-└── lib/
-    ├── db.ts
-    ├── tsdb.ts
-    ├── redis.ts
-    ├── auth.ts
-    └── alpaca.ts
-```
-
----
-
-## Key UX rules
-
-1. Numbers always DM Mono. Never render a price, score, percentage, or timestamp in a sans-serif font.
-
-2. Dropped signals are never hidden. They are shown at 45% opacity with the drop reason visible. The user should always be able to see what the system filtered and why.
-
-3. The confirm button requires a 3-second hold. This applies to both paper and live. The only difference is the button color and label. Prevents accidental execution.
-
-4. Expected return is always shown with its statistical basis. Never show "+4.2% expected return" without showing "68% win rate, 31 samples" immediately adjacent. The disclaimer about historical performance is part of the BacktestStats component and cannot be removed.
-
-5. Paper mode is always visually distinct from live mode. The PAPER MODE pill is shown in the topbar on every page. The confirm button is blue in paper mode, green in live mode. This distinction is never ambiguous.
-
-6. Empty states are informative, not decorative. They tell the user what the system is doing ("The system is monitoring your markets") not just that there's no data.
-
-7. Errors are inline, not modal. API errors appear in the section that failed, not as overlays or toasts. The user can see the error in context and retry without losing their place.
-
-8. The strategy detail panel always shows something. If no strategy is selected, it shows the most recent pending strategy by default. If there are no strategies at all, it shows the empty state.
-
-9. All relative timestamps update without page refresh. Use a single setInterval at the app level and pass the current time as context, not per-component intervals.
-
-10. The onboarding flow saves progress at each step. If the user closes the browser mid-onboarding, they resume where they left off.
+**Feature store replaces Couchbase and MongoDB**
+Couchbase was used as a glorified event log. PostgreSQL handles this with a
+features table and proper indexes. MongoDB stored subscriptions — pure relational
+data that belongs in PostgreSQL with foreign keys. Both removed.
+
+**Claude explains predictions, does not make them**
+Claude has no access to your historical data. Asking it "is this an opportunity?"
+produces confident-sounding answers grounded in nothing. The XGBoost model has
+access to 2 years of labeled feature rows. It makes the decision. Claude receives
+the decision + SHAP values + historical context and writes four fields of narrative.
+This is the correct division of labor.
+
+**Rule-based scorer as placeholder**
+The XGBoost model needs ~90 days of labeled data before it's meaningful.
+The rule scorer keeps the pipeline running and testable from day one.
+It is replaced by a single import swap — no other code changes.
+
+**ML training outside Docker**
+Training is a batch job, not a persistent service. Running it in a Docker container
+adds VM overhead for no benefit. It runs in local Python, connects to TimescaleDB
+via the exposed port, saves a model file, done. The model file is mounted
+read-only into the ai-correlator container.
+
+**pgvector instead of a dedicated vector database**
+pgvector with HNSW handles millions of vectors at sub-5ms latency.
+No new service, SDK, auth, or backup strategy needed.
+Dedicated vector DBs earn their place at 100M+ vectors. Not relevant here.
+
+**Hold-to-confirm on trade execution**
+3-second hold required before any order submits. Applies to paper and live.
+Prevents accidental execution. Idempotency key on every trade submission
+prevents duplicate orders from retries or double-taps.
+
+**Expected return sourced from backtest, not Claude**
+The prompt explicitly instructs Claude not to fabricate return estimates.
+expected_return_pct in every opportunity is the backtest avg_return_pct.
+The UI displays sample_size and win_rate alongside it. Past performance disclaimer
+is a non-removable component of the BacktestStats component.
