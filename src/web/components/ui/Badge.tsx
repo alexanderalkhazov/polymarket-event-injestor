@@ -20,28 +20,30 @@ const SOURCE_LABELS: Record<string, string> = {
 
 interface ActionBadgeProps { action: string }
 export function ActionBadge({ action }: ActionBadgeProps) {
-  const c = ACTION_COLORS[action.toLowerCase()] ?? ACTION_COLORS.watch
+  const key = (action ?? "watch").toLowerCase()
+  const c = ACTION_COLORS[key] ?? ACTION_COLORS.watch
   return (
     <span style={{
       fontFamily: "var(--font-dm-mono)", fontSize: 10, padding: "2px 6px",
       borderRadius: 4, background: c.bg, color: c.color,
       border: `1px solid ${c.border}`, textTransform: "uppercase", letterSpacing: "0.06em",
     }}>
-      {action.toUpperCase()}
+      {(action ?? "watch").toUpperCase()}
     </span>
   )
 }
 
 interface SourceChipProps { source: string }
 export function SourceChip({ source }: SourceChipProps) {
-  const c = SOURCE_COLORS[source.toLowerCase()] ?? SOURCE_COLORS.analytics
+  const key = (source ?? "analytics").toLowerCase()
+  const c = SOURCE_COLORS[key] ?? SOURCE_COLORS.analytics
   return (
     <span style={{
       fontFamily: "var(--font-dm-mono)", fontSize: 10, padding: "2px 6px",
       borderRadius: 4, background: c.bg, color: c.color,
       border: `1px solid ${c.border}`, letterSpacing: "0.06em",
     }}>
-      {SOURCE_LABELS[source.toLowerCase()] ?? source.toUpperCase()}
+      {SOURCE_LABELS[key] ?? (source ?? "UNK").toUpperCase()}
     </span>
   )
 }
@@ -53,14 +55,15 @@ export function StatusBadge({ status }: StatusBadgeProps) {
     watching: "var(--amber)", pending: "var(--amber)",
     executed: "var(--green)", dismissed: "var(--muted)",
   }
-  const color = colors[status.toLowerCase()] ?? "var(--muted)"
+  const key = (status ?? "pending").toLowerCase()
+  const color = colors[key] ?? "var(--muted)"
   return (
     <span style={{
       fontFamily: "var(--font-dm-mono)", fontSize: 10, padding: "2px 6px",
       borderRadius: 4, color, border: `1px solid ${color}`,
       background: "transparent", letterSpacing: "0.06em", textTransform: "uppercase",
     }}>
-      {status.toUpperCase()}
+      {(status ?? "pending").toUpperCase()}
     </span>
   )
 }

@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
+import { tsdb } from "@/lib/tsdb"
 
 export async function GET(req: Request) {
   const session = await auth()
@@ -37,9 +38,9 @@ export async function GET(req: Request) {
       [id]
     )
 
-    const macroRes = await db.query(
-      `SELECT series_id, value FROM macro_indicators
-       ORDER BY ts DESC LIMIT 6`
+    const macroRes = await tsdb.query(
+      `SELECT DISTINCT ON (series_id) series_id, value
+       FROM macro_indicators ORDER BY series_id, time DESC LIMIT 6`
     )
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
