@@ -1,4 +1,4 @@
-"""Signal backtester using vectorbt — validates setups before AI escalation."""
+"""Signal backtester — estimates return distributions. Does NOT gate or reject signals."""
 from __future__ import annotations
 
 import logging
@@ -9,51 +9,79 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-MIN_SAMPLE = 20
-MIN_WIN = 0.45
-
 
 class SignalBacktester:
-    def __init__(self, tsdb_pool) -> None:  # asyncpg pool for timescaledb
+    def __init__(self, tsdb_pool) -> None:
         self.tsdb = tsdb_pool
 
-    async def validate(self, signals: list[dict]) -> dict:
+    async def estimate(self, signals: list[dict]) -> dict:
+        """Return statistical estimates for this signal cluster. Never gates or blocks."""
         symbol = signals[0]["symbol"]
         ohlcv = await self._load_ohlcv(symbol)
         if ohlcv is None or len(ohlcv) < 60:
-            return self._fail("insufficient history")
+            return self._empty(symbol, signals, "insufficient history")
 
         entry_dates = await self._find_similar_setups(signals, ohlcv)
-        if len(entry_dates) < MIN_SAMPLE:
-            return self._fail(f"only {len(entry_dates)} occurrences, need {MIN_SAMPLE}")
+        if not entry_dates:
+            return self._empty(symbol, signals, "no similar setups found")
 
-        returns = self._forward_returns(ohlcv, entry_dates, hold_days=5)
-        if not returns:
-            return self._fail("no valid return calculations")
+        # Find the holding period with the best Sharpe
+        best_returns, holding_period = self._best_holding_period(ohlcv, entry_dates)
+        if not best_returns:
+            return self._empty(symbol, signals, "no valid return calculations")
 
-        wins = [r for r in returns if r > 0]
-        losses = [r for r in returns if r <= 0]
-        win_rate = len(wins) / len(returns)
-        avg_ret = float(np.mean(returns))
-        med_ret = float(np.median(returns))
+        wins = [r for r in best_returns if r > 0]
+        losses = [r for r in best_returns if r <= 0]
+        win_rate = len(wins) / len(best_returns)
+        avg_ret = float(np.mean(best_returns))
+        med_ret = float(np.median(best_returns))
         avg_win = float(np.mean(wins)) if wins else 0.0
         avg_loss = float(np.mean(losses)) if losses else 0.0
         expect = win_rate * avg_win - (1 - win_rate) * abs(avg_loss)
+        sharpe = self._sharpe(best_returns)
+        max_dd = self._max_dd(best_returns)
 
-        passed = win_rate >= MIN_WIN and len(returns) >= MIN_SAMPLE
+        n = len(best_returns)
+        if n >= 30:
+            data_quality = "sufficient"
+        elif n >= 10:
+            data_quality = "low"
+        else:
+            data_quality = "very_low"
 
         return {
-            "passed": passed,
-            "sample_size": len(returns),
+            "sample_size": n,
             "win_rate": round(win_rate, 4),
+            "expected_return": round(expect, 5),
+            "expected_drawdown": round(max_dd, 5),
             "avg_return_pct": round(avg_ret * 100, 2),
             "median_return_pct": round(med_ret * 100, 2),
             "expectancy": round(expect * 100, 2),
-            "sharpe": round(self._sharpe(returns), 2),
-            "max_drawdown_pct": round(self._max_dd(returns) * 100, 2),
+            "sharpe": round(sharpe, 2),
+            "max_drawdown_pct": round(max_dd * 100, 2),
+            "holding_period_optimal": holding_period,
+            "data_quality": data_quality,
             "strategy_name": "multi_" + "+".join(sorted({s["type"] for s in signals})),
             "symbol": symbol,
         }
+
+    def _best_holding_period(
+        self, ohlcv: pd.DataFrame, entry_dates: list
+    ) -> tuple[list[float], str]:
+        candidates = [(3, "3d"), (5, "5d"), (10, "10d")]
+        best_returns: list[float] = []
+        best_label = "5d"
+        best_sharpe = -999.0
+        for days, label in candidates:
+            r = self._forward_returns(ohlcv, entry_dates, hold_days=days)
+            if not r:
+                continue
+            s = self._sharpe(r)
+            if s > best_sharpe:
+                best_sharpe = s
+                best_returns = r
+                best_label = label
+        return best_returns, best_label
 
     async def _load_ohlcv(self, symbol: str) -> Optional[pd.DataFrame]:
         try:
@@ -65,8 +93,7 @@ class SignalBacktester:
             if not rows:
                 return None
             df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
-            df = df.set_index("time").sort_index()
-            return df
+            return df.set_index("time").sort_index()
         except Exception as exc:
             logger.error("Failed to load OHLCV for %s: %s", symbol, exc)
             return None
@@ -79,10 +106,9 @@ class SignalBacktester:
             )
             if not rows:
                 return None
-            s = pd.Series(
+            return pd.Series(
                 {r["time"]: float(r["value"]) for r in rows}
             ).reindex(index, method="ffill")
-            return s
         except Exception:
             return None
 
@@ -139,15 +165,20 @@ class SignalBacktester:
         dd = (curve - peak) / peak
         return float(dd.min())
 
-    def _fail(self, reason: str) -> dict:
+    def _empty(self, symbol: str, signals: list[dict], reason: str) -> dict:
         return {
-            "passed": False,
-            "drop_reason": reason,
             "sample_size": 0,
-            "win_rate": 0,
-            "avg_return_pct": 0,
-            "median_return_pct": 0,
-            "expectancy": 0,
-            "sharpe": 0,
-            "max_drawdown_pct": 0,
+            "win_rate": 0.0,
+            "expected_return": 0.0,
+            "expected_drawdown": 0.0,
+            "avg_return_pct": 0.0,
+            "median_return_pct": 0.0,
+            "expectancy": 0.0,
+            "sharpe": 0.0,
+            "max_drawdown_pct": 0.0,
+            "holding_period_optimal": "5d",
+            "data_quality": "none",
+            "strategy_name": "multi_" + "+".join(sorted({s["type"] for s in signals})),
+            "symbol": symbol,
+            "note": reason,
         }

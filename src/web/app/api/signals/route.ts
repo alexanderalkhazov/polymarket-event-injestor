@@ -3,7 +3,7 @@ import { db } from "@/lib/db"
 
 export async function GET(req: Request) {
   const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
+  if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
 
   const { searchParams } = new URL(req.url)
   const source = searchParams.get("source")
@@ -22,5 +22,10 @@ export async function GET(req: Request) {
   params.push(limit)
 
   const res = await db.query(query, params)
-  return Response.json({ signals: res.rows })
+  const signals = res.rows.map((r: Record<string, unknown>) => ({
+    ...r,
+    score: r.score != null ? Number(r.score) : 0,
+    pipeline_step: r.pipeline_step != null ? Number(r.pipeline_step) : 0,
+  }))
+  return Response.json({ signals })
 }

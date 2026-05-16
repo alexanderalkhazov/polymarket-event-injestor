@@ -60,13 +60,13 @@ export function SignalTable({ signals }: SignalTableProps) {
                   <SourceChip source={s.source} />
                 </td>
                 <td style={{ padding: "8px 10px", color: "var(--muted)" }}>
-                  {s.type.replace(/_/g, " ")}
+                  {(s.type ?? "").replace(/_/g, " ")}
                 </td>
                 <td style={{ padding: "8px 10px", fontFamily: "var(--font-dm-mono)", fontWeight: 600 }}>
                   {s.symbol}
                 </td>
                 <td style={{ padding: "8px 10px", fontFamily: "var(--font-dm-mono)", color: "var(--dim)" }}>
-                  {s.score.toFixed(3)}
+                  {Number(s.score ?? 0).toFixed(3)}
                 </td>
                 <td style={{ padding: "8px 10px", minWidth: 140 }}>
                   <PipelineSteps currentStep={s.pipeline_step ?? 0} status={dropped ? "failed" : "done"} />

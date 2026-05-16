@@ -1,4 +1,4 @@
-"""Analytics consumer — reads raw ticker snapshots, detects signals, writes to postgres."""
+"""Analytics consumer — probabilistic signal scoring from raw ticker snapshots."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import asyncpg
 import redis.asyncio as aioredis
@@ -14,13 +14,47 @@ from confluent_kafka import Consumer, KafkaError
 
 logger = logging.getLogger(__name__)
 
-VOLUME_SPIKE_RATIO = 2.0
-PRICE_MOVE_PCT = 5.0
-RSI_OVERBOUGHT = 75.0
-RSI_OVERSOLD = 25.0
-PC_RATIO_HIGH = 3.0
-PC_RATIO_LOW = 0.33
 COOLDOWN_HOURS = 4
+MIN_SIGNAL_SCORE = 0.15
+
+# Detection thresholds (used to determine if a signal fires at all)
+VOLUME_SPIKE_RATIO = 1.8
+PRICE_MOVE_PCT = 4.0
+RSI_OVERBOUGHT = 72.0
+RSI_OVERSOLD = 28.0
+PC_RATIO_HIGH = 2.5
+PC_RATIO_LOW = 0.40
+
+
+def _score_volume(ratio: float) -> Tuple[float, str, list]:
+    """Score proportional to how far ratio exceeds the threshold."""
+    score = round(min(1.0, (ratio - 1.0) / 6.0), 4)
+    urgency = "high" if score >= 0.6 else "medium" if score >= 0.3 else "low"
+    ci = [round(max(0.0, score - 0.10), 3), round(min(1.0, score + 0.10), 3)]
+    return score, urgency, ci
+
+
+def _score_momentum(pct: float) -> Tuple[float, str, list]:
+    score = round(min(1.0, abs(pct) / 20.0), 4)
+    urgency = "high" if abs(pct) >= 10 else "medium" if abs(pct) >= 5 else "low"
+    ci = [round(max(0.0, score - 0.08), 3), round(min(1.0, score + 0.08), 3)]
+    return score, urgency, ci
+
+
+def _score_rsi(rsi: float) -> Tuple[float, str, list]:
+    # Distance from neutral (50), normalised to [0, 1]
+    distance = round(abs(rsi - 50.0) / 50.0, 4)
+    urgency = "high" if distance >= 0.60 else "medium" if distance >= 0.40 else "low"
+    ci = [round(max(0.0, distance - 0.05), 3), round(min(1.0, distance + 0.05), 3)]
+    return distance, urgency, ci
+
+
+def _score_options(pcr: float) -> Tuple[float, str, list]:
+    # Deviation from neutral put/call ratio of 1.0, capped at max deviation of 4.0
+    score = round(min(1.0, abs(pcr - 1.0) / 4.0), 4)
+    urgency = "high" if score >= 0.6 else "medium" if score >= 0.3 else "low"
+    ci = [round(max(0.0, score - 0.12), 3), round(min(1.0, score + 0.12), 3)]
+    return score, urgency, ci
 
 
 class AnalyticsConsumer:
@@ -37,7 +71,6 @@ class AnalyticsConsumer:
         self._group_id = group_id
         self._database_url = database_url
         self._redis_url = redis_url
-        # cooldown tracking: (ticker, signal_type) → last fired time
         self._cooldowns: Dict[Tuple[str, str], datetime] = {}
         self._pool: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
@@ -53,11 +86,8 @@ class AnalyticsConsumer:
         )
 
     def _in_cooldown(self, ticker: str, signal_type: str) -> bool:
-        key = (ticker, signal_type)
-        last = self._cooldowns.get(key)
-        if last is None:
-            return False
-        return (datetime.now(timezone.utc) - last).total_seconds() < COOLDOWN_HOURS * 3600
+        last = self._cooldowns.get((ticker, signal_type))
+        return last is not None and (datetime.now(timezone.utc) - last).total_seconds() < COOLDOWN_HOURS * 3600
 
     def _set_cooldown(self, ticker: str, signal_type: str) -> None:
         self._cooldowns[(ticker, signal_type)] = datetime.now(timezone.utc)
@@ -99,57 +129,69 @@ class AnalyticsConsumer:
         ticker = raw.get("ticker", "")
         now = datetime.now(timezone.utc)
 
-        signals = []
+        # Each entry: (signal_type, score, urgency, ci, direction)
+        signals: List[Tuple[str, float, str, list, Optional[str]]] = []
 
-        # Volume spike
         cur_vol = raw.get("current_volume")
         avg_vol = raw.get("avg_volume_30d")
         if cur_vol and avg_vol and avg_vol > 0:
             ratio = cur_vol / avg_vol
             if ratio >= VOLUME_SPIKE_RATIO and not self._in_cooldown(ticker, "volume_spike"):
-                signals.append(("volume_spike", ratio, None))
-                self._set_cooldown(ticker, "volume_spike")
+                score, urgency, ci = _score_volume(ratio)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("volume_spike", score, urgency, ci, None))
+                    self._set_cooldown(ticker, "volume_spike")
 
-        # Price momentum
         chg = raw.get("price_change_1d_pct")
         if chg is not None and abs(chg) >= PRICE_MOVE_PCT and not self._in_cooldown(ticker, "momentum"):
-            direction = "up" if chg > 0 else "down"
-            signals.append(("momentum", abs(chg) / 100, direction))
-            self._set_cooldown(ticker, "momentum")
+            score, urgency, ci = _score_momentum(chg)
+            if score >= MIN_SIGNAL_SCORE:
+                direction = "up" if chg > 0 else "down"
+                signals.append(("momentum", score, urgency, ci, direction))
+                self._set_cooldown(ticker, "momentum")
 
-        # RSI extreme
         rsi = raw.get("rsi_14")
         if rsi is not None and not self._in_cooldown(ticker, "rsi_extreme"):
-            if rsi > RSI_OVERBOUGHT:
-                signals.append(("rsi_extreme", rsi / 100, "up"))
-                self._set_cooldown(ticker, "rsi_extreme")
-            elif rsi < RSI_OVERSOLD:
-                signals.append(("rsi_extreme", (100 - rsi) / 100, "down"))
-                self._set_cooldown(ticker, "rsi_extreme")
+            if rsi > RSI_OVERBOUGHT or rsi < RSI_OVERSOLD:
+                score, urgency, ci = _score_rsi(rsi)
+                if score >= MIN_SIGNAL_SCORE:
+                    direction = "up" if rsi > 50 else "down"
+                    signals.append(("rsi_extreme", score, urgency, ci, direction))
+                    self._set_cooldown(ticker, "rsi_extreme")
 
-        # Options unusual
         pcr = raw.get("put_call_ratio")
         if pcr is not None and not self._in_cooldown(ticker, "options_unusual"):
             if pcr >= PC_RATIO_HIGH or pcr <= PC_RATIO_LOW:
-                direction = "down" if pcr >= PC_RATIO_HIGH else "up"
-                signals.append(("options_unusual", pcr, direction))
-                self._set_cooldown(ticker, "options_unusual")
+                score, urgency, ci = _score_options(pcr)
+                if score >= MIN_SIGNAL_SCORE:
+                    direction = "down" if pcr >= PC_RATIO_HIGH else "up"
+                    signals.append(("options_unusual", score, urgency, ci, direction))
+                    self._set_cooldown(ticker, "options_unusual")
 
-        for signal_type, score, direction in signals:
+        for signal_type, score, urgency, ci, direction in signals:
             signal_id = str(uuid.uuid4())
+            payload = {
+                **raw,
+                "signal_score": score,
+                "urgency": urgency,
+                "confidence_interval": ci,
+            }
             await self._pool.execute(
                 """INSERT INTO signals (id, source, symbol, type, score, direction, payload, created_at)
                    VALUES ($1, 'analytics', $2, $3, $4, $5, $6, $7)""",
                 uuid.UUID(signal_id),
                 ticker,
                 signal_type,
-                float(score),
+                score,
                 direction,
-                json.dumps(raw),
+                json.dumps(payload),
                 now,
             )
             await self._redis.publish(
                 "new_signal",
                 json.dumps({"signal_id": signal_id, "source": "analytics", "symbol": ticker}),
             )
-            logger.info("Analytics signal: %s %s score=%.3f dir=%s", ticker, signal_type, score, direction)
+            logger.info(
+                "Analytics signal: %s %s score=%.3f urgency=%s dir=%s",
+                ticker, signal_type, score, urgency, direction,
+            )

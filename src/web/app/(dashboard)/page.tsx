@@ -18,7 +18,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 ]
 
 export default function StrategyInboxPage() {
-  const strategies = useStrategyStream()
+  const { strategies, connected } = useStrategyStream()
   const [selected, setSelected] = useState<Strategy | null>(null)
   const [filter, setFilter] = useState<Filter>("all")
   const [localStatuses, setLocalStatuses] = useState<Record<string, string>>({})
@@ -94,12 +94,25 @@ export default function StrategyInboxPage() {
           borderRight: selected ? "1px solid var(--border)" : "none",
           transition: "width 0.15s",
         }}>
-          {strategies.length === 0 && (
+          {!connected && strategies.length === 0 && (
             <>
               <Skeleton height={120} />
               <Skeleton height={120} />
               <Skeleton height={80} />
             </>
+          )}
+          {connected && strategies.length === 0 && (
+            <div style={{
+              display: "flex", flexDirection: "column", alignItems: "center",
+              justifyContent: "center", height: 300, gap: 10,
+              color: "var(--muted)", fontSize: 13,
+            }}>
+              <div style={{ fontSize: 28, opacity: 0.3 }}>◎</div>
+              <div>Waiting for strategies</div>
+              <div style={{ fontSize: 11, color: "var(--dim)" }}>
+                The correlator will surface opportunities when signals align.
+              </div>
+            </div>
           )}
           {filtered.map((s) => (
             <StrategyCard

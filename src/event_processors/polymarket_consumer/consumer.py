@@ -1,4 +1,4 @@
-"""Polymarket consumer — reads raw snapshots, detects conviction shifts, writes to postgres."""
+"""Polymarket consumer — probabilistic conviction scoring from market snapshots."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import asyncpg
 import redis.asyncio as aioredis
@@ -15,9 +15,24 @@ from confluent_kafka import Consumer, KafkaError
 
 logger = logging.getLogger(__name__)
 
-# Conviction detection thresholds
-DEFAULT_ABS_THRESHOLD = 0.10
-DEFAULT_PCT_THRESHOLD = 0.20
+MIN_SIGNAL_SCORE = 0.10
+
+
+def _score_conviction(
+    change_abs: float, change_pct: float, volume: Optional[float]
+) -> Tuple[float, str, list]:
+    # Weight absolute change more than relative (absolute moves in a prediction market are meaningful)
+    score = min(1.0, change_abs * 5.0 + change_pct * 1.5)
+    # Volume boost: high-liquidity shifts are more informative
+    if volume and volume > 200_000:
+        score = min(1.0, score * 1.15)
+    elif volume and volume > 50_000:
+        score = min(1.0, score * 1.05)
+    score = round(score, 4)
+
+    urgency = "high" if score >= 0.60 else "medium" if score >= 0.35 else "low"
+    ci = [round(max(0.0, score - 0.12), 3), round(min(1.0, score + 0.12), 3)]
+    return score, urgency, ci
 
 
 @dataclass
@@ -97,17 +112,18 @@ class PolymarketConsumer:
         state.last_yes_price = yes_price
 
         if prev is None:
-            return  # baseline set, no signal yet
+            return
 
         change_abs = abs(yes_price - prev)
         change_pct = change_abs / prev if prev > 0 else 0.0
 
-        if change_abs < DEFAULT_ABS_THRESHOLD and change_pct < DEFAULT_PCT_THRESHOLD:
+        signal_score, urgency, ci = _score_conviction(
+            change_abs, change_pct, raw.get("volume")
+        )
+        if signal_score < MIN_SIGNAL_SCORE:
             return
 
         direction = "up" if yes_price > prev else "down"
-        score = round(change_abs, 4)
-
         signal_id = str(uuid.uuid4())
         payload = {
             "market_id": market_id,
@@ -118,6 +134,9 @@ class PolymarketConsumer:
             "change_pct": round(change_pct, 4),
             "volume": raw.get("volume"),
             "liquidity": raw.get("liquidity"),
+            "signal_score": signal_score,
+            "urgency": urgency,
+            "confidence_interval": ci,
         }
 
         await self._pool.execute(
@@ -125,11 +144,16 @@ class PolymarketConsumer:
                VALUES ($1, 'polymarket', $2, 'conviction_shift', $3, $4, $5, $6)""",
             uuid.UUID(signal_id),
             market_id,
-            score,
+            signal_score,
             direction,
             json.dumps(payload),
             datetime.now(timezone.utc),
         )
-
-        await self._redis.publish("new_signal", json.dumps({"signal_id": signal_id, "source": "polymarket", "symbol": market_id}))
-        logger.info("Conviction shift: %s %.4f→%.4f (%s)", market_id[:16], prev, yes_price, direction)
+        await self._redis.publish(
+            "new_signal",
+            json.dumps({"signal_id": signal_id, "source": "polymarket", "symbol": market_id}),
+        )
+        logger.info(
+            "Conviction shift: %s %.4f→%.4f score=%.3f urgency=%s",
+            market_id[:16], prev, yes_price, signal_score, urgency,
+        )

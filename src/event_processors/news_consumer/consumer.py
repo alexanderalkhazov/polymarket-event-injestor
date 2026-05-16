@@ -1,4 +1,4 @@
-"""News consumer — reads raw articles, scores hotness, writes signals to postgres."""
+"""News consumer — probabilistic signal scoring from raw articles."""
 from __future__ import annotations
 
 import json
@@ -6,8 +6,8 @@ import logging
 import math
 import os
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Set
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Set, Tuple
 
 import asyncpg
 import redis.asyncio as aioredis
@@ -15,7 +15,6 @@ from confluent_kafka import Consumer, KafkaError
 
 logger = logging.getLogger(__name__)
 
-# Credibility weights
 _CREDIBILITY: Dict[str, float] = {
     "reuters": 1.00, "bloomberg": 1.00,
     "financial times": 0.95, "ft": 0.95,
@@ -31,26 +30,37 @@ _HOT_KEYWORDS = [
     "surges", "plunges", "crashes", "soars", "spikes",
 ]
 
-MIN_HOTNESS = 0.40
+MIN_SIGNAL_SCORE = 0.20
 
 
-def _score_hotness(article: dict, now: datetime) -> float:
+def _score_signal(article: dict, now: datetime) -> Tuple[float, str, list]:
     published_at = datetime.fromisoformat(article.get("published_at", now.isoformat()))
     if published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=timezone.utc)
     age_hours = max(0, (now - published_at).total_seconds() / 3600)
     recency = math.exp(-0.693 * age_hours / 4)  # half-life 4h
 
-    # Source credibility
     source = article.get("source_name", "").lower()
     credibility = next((v for k, v in _CREDIBILITY.items() if k in source), 0.55)
 
-    # Keyword multiplier
     text = (article.get("headline", "") + " " + article.get("summary", "")).lower()
     keyword_hits = sum(1 for kw in _HOT_KEYWORDS if kw in text)
     keyword_mult = min(2.0, 1.0 + keyword_hits * 0.25)
 
-    return round(recency * credibility * keyword_mult, 4)
+    score = round(recency * credibility * keyword_mult, 4)
+
+    # Confidence interval: known sources → narrower CI
+    ci_half = round(0.08 + (1.0 - credibility) * 0.12, 3)
+    ci = [round(max(0.0, score - ci_half), 3), round(min(1.0, score + ci_half), 3)]
+
+    if score >= 0.70:
+        urgency = "high"
+    elif score >= 0.40:
+        urgency = "medium"
+    else:
+        urgency = "low"
+
+    return score, urgency, ci
 
 
 class NewsConsumer:
@@ -61,14 +71,12 @@ class NewsConsumer:
         group_id: str,
         database_url: str,
         redis_url: str,
-        min_hotness: float = MIN_HOTNESS,
     ) -> None:
         self._bootstrap_servers = bootstrap_servers
         self._topic = topic
         self._group_id = group_id
         self._database_url = database_url
         self._redis_url = redis_url
-        self._min_hotness = min_hotness
         self._seen_articles: Set[str] = set()
         self._pool: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
@@ -127,27 +135,33 @@ class NewsConsumer:
                 continue
             self._seen_articles.add(article_id)
 
-            hotness = _score_hotness(article, now)
-            if hotness < self._min_hotness:
+            signal_score, urgency, confidence_interval = _score_signal(article, now)
+            if signal_score < MIN_SIGNAL_SCORE:
                 continue
 
             signal_id = str(uuid.uuid4())
-            payload = {**article, "hotness_score": hotness}
-            direction = None  # determined by sentiment in future enhancement
+            payload = {
+                **article,
+                "signal_score": signal_score,
+                "urgency": urgency,
+                "confidence_interval": confidence_interval,
+            }
 
             await self._pool.execute(
                 """INSERT INTO signals (id, source, symbol, type, score, direction, payload, created_at)
-                   VALUES ($1, 'news', $2, 'hotness', $3, $4, $5, $6)""",
+                   VALUES ($1, 'news', $2, 'news_catalyst', $3, NULL, $4, $5)""",
                 uuid.UUID(signal_id),
                 ticker,
-                hotness,
-                direction,
+                signal_score,
                 json.dumps(payload),
                 now,
             )
-
             await self._redis.publish(
                 "new_signal",
                 json.dumps({"signal_id": signal_id, "source": "news", "symbol": ticker}),
             )
-            logger.info("Hot news signal: %s hotness=%.3f %s", ticker, hotness, article.get("headline", "")[:60])
+            logger.info(
+                "News signal: %s score=%.3f urgency=%s ci=%s '%s'",
+                ticker, signal_score, urgency, confidence_interval,
+                article.get("headline", "")[:50],
+            )

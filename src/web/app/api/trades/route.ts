@@ -4,7 +4,7 @@ import { getAlpaca } from "@/lib/alpaca"
 
 export async function POST(req: Request) {
   const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
+  if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
 
   const { strategy_id, confirmed } = await req.json()
   if (!confirmed)
@@ -64,7 +64,7 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
+  if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
   const userId = (session.user as { id?: string }).id
   const { searchParams } = new URL(req.url)
   const type = searchParams.get("type")

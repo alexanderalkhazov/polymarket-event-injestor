@@ -21,10 +21,10 @@ export function SignalList({ signals }: SignalListProps) {
           <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <SourceChip source={s.source} />
             <span style={{ fontSize: 12, color: "var(--muted)", flex: 1 }}>
-              {s.type.replace(/_/g, " ")} · {s.symbol}
+              {(s.type ?? "").replace(/_/g, " ")} · {s.symbol}
             </span>
             <span style={{ fontFamily: "var(--font-dm-mono)", fontSize: 11, color: "var(--dim)" }}>
-              {s.score.toFixed(3)}
+              {Number(s.score ?? 0).toFixed(3)}
             </span>
           </div>
         ))}

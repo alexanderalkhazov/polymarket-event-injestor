@@ -3,7 +3,7 @@ import { db } from "@/lib/db"
 
 export async function GET(req: Request) {
   const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
+  if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
 
   const { searchParams } = new URL(req.url)
   const passed = searchParams.get("passed")
@@ -20,5 +20,15 @@ export async function GET(req: Request) {
 
   query += " ORDER BY created_at DESC LIMIT 500"
   const res = await db.query(query, params)
-  return Response.json({ results: res.rows })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const n = (v: any) => (v != null ? Number(v) : null)
+  const results = res.rows.map((r) => ({
+    ...r,
+    win_rate: n(r.win_rate),
+    avg_return_pct: n(r.avg_return_pct),
+    max_drawdown_pct: n(r.max_drawdown_pct),
+    sharpe: n(r.sharpe),
+    sample_size: n(r.sample_size),
+  }))
+  return Response.json({ results })
 }

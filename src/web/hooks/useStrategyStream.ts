@@ -20,8 +20,9 @@ export interface Strategy {
   created_at: string
 }
 
-export function useStrategyStream(): Strategy[] {
+export function useStrategyStream(): { strategies: Strategy[]; connected: boolean } {
   const [strategies, setStrategies] = useState<Strategy[]>([])
+  const [connected, setConnected] = useState(false)
 
   useEffect(() => {
     let es: EventSource
@@ -29,15 +30,20 @@ export function useStrategyStream(): Strategy[] {
 
     const connect = () => {
       es = new EventSource("/api/strategies/stream")
+
+      es.onopen = () => setConnected(true)
+
       es.onmessage = (e) => {
         try {
           const s: Strategy = JSON.parse(e.data)
           setStrategies((prev) => [s, ...prev].slice(0, 100))
         } catch {
-          // ignore parse errors
+          // ignore parse errors (e.g. heartbeat comments)
         }
       }
+
       es.onerror = () => {
+        setConnected(false)
         es.close()
         retry = setTimeout(connect, 5000)
       }
@@ -45,10 +51,11 @@ export function useStrategyStream(): Strategy[] {
 
     connect()
     return () => {
+      setConnected(false)
       es?.close()
       clearTimeout(retry)
     }
   }, [])
 
-  return strategies
+  return { strategies, connected }
 }

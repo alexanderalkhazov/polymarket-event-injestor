@@ -7,7 +7,7 @@ export async function GET(
   { params }: { params: { symbol: string } }
 ) {
   const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
+  if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
 
   const { searchParams } = new URL(req.url)
   const days = parseInt(searchParams.get("days") ?? "90")
@@ -41,10 +41,22 @@ export async function GET(
     ),
   ])
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const n = (v: any) => (v != null ? Number(v) : null)
+
   return Response.json({
-    ohlcv: ohlcvRes.rows,
-    technicals: techRes.rows,
-    signals: sigRes.rows,
-    opportunities: oppRes.rows,
+    ohlcv: ohlcvRes.rows.map((r) => ({
+      ...r,
+      open: n(r.open), high: n(r.high), low: n(r.low), close: n(r.close), volume: n(r.volume),
+    })),
+    technicals: techRes.rows.map((r) => ({
+      ...r,
+      rsi: n(r.rsi), macd: n(r.macd), macd_signal: n(r.macd_signal),
+    })),
+    signals: sigRes.rows.map((r) => ({ ...r, score: n(r.score) })),
+    opportunities: oppRes.rows.map((r) => ({
+      ...r,
+      confidence: n(r.confidence), expected_return_pct: n(r.expected_return_pct),
+    })),
   })
 }

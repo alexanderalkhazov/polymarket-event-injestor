@@ -72,7 +72,7 @@ services:
     ports:
       - "5050:80"
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@eventedge.local
+      PGADMIN_DEFAULT_EMAIL: admin@eventedge.com
       PGADMIN_DEFAULT_PASSWORD: admin
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
@@ -83,66 +83,26 @@ services:
       - postgres
       - timescale
 
-  # ── Python producers (dumb — fetch raw, publish to Kafka) ───────────────────
-  polymarket-producer:
+  # ── Python producers (all 3 in one process) ─────────────────────────────────
+  producer:
     build: .
     depends_on:
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     env_file:
       - env/python.env
     environment:
-      SERVICE_NAME: polymarket-producer
+      SERVICE_NAME: producer
     entrypoint:
       - /bin/bash
       - -c
       - |
         until nc -z kafka 29092; do sleep 1; done
-        python -m event_detectors.polymarket_producer
+        python -m event_detectors
     restart: on-failure
 
-  news-producer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: news-producer
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        until nc -z kafka 29092; do sleep 1; done
-        python -m event_detectors.news_producer
-    restart: on-failure
-
-  analytics-producer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: analytics-producer
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        until nc -z kafka 29092; do sleep 1; done
-        python -m event_detectors.analytics_producer
-    restart: on-failure
-
-  # ── Python consumers (smart — detection logic lives here) ───────────────────
-  polymarket-consumer:
+  # ── Python consumers (all 3 in one process) ──────────────────────────────────
+  consumer:
     build: .
     ports:
       - "9101:9101"
@@ -156,62 +116,14 @@ services:
     env_file:
       - env/python.env
     environment:
-      SERVICE_NAME: polymarket-consumer
+      SERVICE_NAME: consumer
       PROMETHEUS_PORT: "9101"
     entrypoint:
       - /bin/bash
       - -c
       - |
         until nc -z kafka 29092; do sleep 1; done
-        python -m event_processors.polymarket_consumer
-    restart: on-failure
-
-  news-consumer:
-    build: .
-    ports:
-      - "9102:9102"
-    depends_on:
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: news-consumer
-      PROMETHEUS_PORT: "9102"
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        until nc -z kafka 29092; do sleep 1; done
-        python -m event_processors.news_consumer
-    restart: on-failure
-
-  analytics-consumer:
-    build: .
-    ports:
-      - "9103:9103"
-    depends_on:
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: analytics-consumer
-      PROMETHEUS_PORT: "9103"
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        until nc -z kafka 29092; do sleep 1; done
-        python -m event_processors.analytics_consumer
+        python -m event_processors
     restart: on-failure
 
   # ── New Python services ──────────────────────────────────────────────────────
@@ -230,25 +142,7 @@ services:
       - /bin/bash
       - -c
       - |
-        python -m historical.ingestor
-    restart: on-failure
-
-  backtester:
-    build: .
-    depends_on:
-      postgres:
-        condition: service_healthy
-      timescale:
-        condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: backtester
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        python -m backtester.__main__
+        python -m historical
     restart: on-failure
 
   ai-correlator:

@@ -50,7 +50,7 @@ export function BacktestRow({ result, expanded, onToggle }: {
           {result.symbol}
         </td>
         <td style={{ padding: "10px 10px", color: "var(--muted)", fontSize: 12 }}>
-          {result.signal_type.replace(/_/g, " ")}
+          {(result.signal_type ?? "").replace(/_/g, " ")}
         </td>
         <td style={{ padding: "10px 10px" }}>
           <span style={{ fontFamily: "var(--font-dm-mono)", fontSize: 12, color: wrColor }}>
@@ -87,7 +87,7 @@ export function BacktestRow({ result, expanded, onToggle }: {
         <tr style={{ borderBottom: "1px solid var(--border)" }}>
           <td colSpan={8} style={{ padding: "0 10px 16px", background: "var(--bg2)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 16 }}>
-              <Stat label="Sharpe ratio" value={result.sharpe?.toFixed(2) ?? null} />
+              <Stat label="Sharpe ratio" value={result.sharpe != null ? Number(result.sharpe).toFixed(2) : null} />
               <Stat label="Win rate" value={wr != null ? `${wr}%` : null} color={wrColor} />
               <Stat label="Avg return" value={result.avg_return_pct != null ? `${result.avg_return_pct}%` : null} color="var(--green)" />
               <Stat label="Sample size" value={result.sample_size?.toString() ?? null} color="var(--muted)" />

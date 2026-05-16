@@ -79,10 +79,10 @@ export function TickerDetail({
             }}>
               <SourceChip source={s.source} />
               <span style={{ fontSize: 11, color: "var(--muted)", flex: 1 }}>
-                {s.type.replace(/_/g, " ")}
+                {(s.type ?? "").replace(/_/g, " ")}
               </span>
               <span style={{ fontFamily: "var(--font-dm-mono)", fontSize: 10, color: "var(--dim)" }}>
-                {s.score.toFixed(3)}
+                {Number(s.score ?? 0).toFixed(3)}
               </span>
               <span style={{ fontFamily: "var(--font-dm-mono)", fontSize: 10, color: "var(--dim)" }}>
                 {relTime(s.created_at)}

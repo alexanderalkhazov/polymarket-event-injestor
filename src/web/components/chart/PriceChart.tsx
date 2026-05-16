@@ -86,7 +86,7 @@ export function PriceChart({ data, markers }: { data: OHLCVRow[]; markers?: Back
         />
         <Tooltip
           contentStyle={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 11 }}
-          formatter={(v: number, name: string) => [v?.toFixed(2), name]}
+          formatter={(v: unknown, name: string) => [v != null ? Number(v).toFixed(2) : "—", name]}
         />
         <Bar yAxisId="vol" dataKey="volume" opacity={0.25}>
           {chartData.map((entry, i) => (

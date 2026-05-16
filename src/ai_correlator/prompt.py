@@ -1,65 +1,59 @@
-"""Build the Claude prompt for opportunity detection."""
+"""Build the Groq prompt — AI is a structured classifier, not a trade generator."""
 from __future__ import annotations
 
 
 def sig_text(s: dict) -> str:
-    return f"{s['source']} {s['type']} {s['symbol']} score={s['score']:.3f} dir={s.get('direction', 'n/a')}"
+    payload = s.get("payload") or {}
+    if isinstance(payload, str):
+        import json
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+    urgency = payload.get("urgency", "")
+    ci = payload.get("confidence_interval", [])
+    ci_str = f" ci={ci}" if ci else ""
+    return (
+        f"source={s['source']:<12} type={s['type']:<18} "
+        f"symbol={s['symbol'][:20]:<20} score={s['score']:.3f}"
+        f"{' urgency=' + urgency if urgency else ''}{ci_str}"
+    )
 
 
-def build_prompt(new_signal: dict, recent: list, sim_sigs: list, sim_opps: list, macro: list, bt: dict) -> str:
+def build_prompt(new_signal: dict, recent: list, macro: list, bt: dict) -> str:
     recent_str = "\n".join(f"  {sig_text(s)}" for s in recent)
-    sim_sig_str = "\n".join(
-        f"  [{s.get('sim', 0):.0%}] {sig_text(s)}" for s in sim_sigs
-    ) or "  none"
-    sim_opp_str = "\n".join(
-        f"  [{o.get('sim', 0):.0%}] {o['summary']} — action={o['action']} conf={o['confidence']:.0%}"
-        for o in sim_opps
-    ) or "  none"
-    macro_str = "\n".join(f"  {r['series_id']}: {r['value']}" for r in macro)
+    macro_str = "\n".join(f"  {r['series_id']}: {r['value']}" for r in macro) or "  unavailable"
 
-    return f"""You are a quantitative analyst inside an algorithmic trading system.
+    return f"""You are a structured market event classifier. Your role is to INTERPRET and CLASSIFY signals — not to generate trades.
 
-NEW SIGNAL:
-  {sig_text(new_signal)}
-
-RECENT CROSS-SOURCE SIGNALS (last 15 min, {len(recent)} signals, {len({s['source'] for s in recent})} sources):
+SIGNAL CLUSTER ({len(recent)} signals, {len({s['source'] for s in recent})} sources, last 15 min):
 {recent_str}
 
-BACKTEST RESULT (how this exact signal combination performed historically):
-  sample_size={bt.get('sample_size', 0)} occurrences over 2 years
-  win_rate={bt.get('win_rate', 0):.0%}
-  avg_return={bt.get('avg_return_pct', 0)}% (5-day hold)
-  median_return={bt.get('median_return_pct', 0)}%
-  sharpe={bt.get('sharpe', 'n/a')}
-  max_drawdown={bt.get('max_drawdown_pct', 'n/a')}%
-  expectancy={bt.get('expectancy', 0)}% per trade
-
-SEMANTICALLY SIMILAR PAST SIGNALS:
-{sim_sig_str}
-
-SIMILAR PAST OPPORTUNITIES AND OUTCOMES:
-{sim_opp_str}
+BACKTEST STATISTICS (how similar setups performed historically):
+  sample_size={bt['sample_size']}  data_quality={bt['data_quality']}
+  win_rate={bt['win_rate']:.0%}    expectancy={bt['expectancy']:+.2f}%/trade
+  sharpe={bt['sharpe']:.2f}        max_drawdown={bt['max_drawdown_pct']:.1f}%
+  optimal_hold={bt['holding_period_optimal']}
 
 CURRENT MACRO CONDITIONS:
 {macro_str}
 
 INSTRUCTIONS:
-- Base expected_return_pct directly on the backtest avg_return_pct — do not fabricate.
-- If win_rate < 50%, cap confidence at 0.65 regardless of signal strength.
-- Factor macro context into your thesis (e.g. rising rates affect equities differently than commodities).
-- Reference similar past opportunities if found and note whether they played out.
+- Classify the event type and identify which sectors are affected.
+- Estimate a confidence_adjustment in the range [-0.20, +0.20].
+  Use NEGATIVE adjustments for: conflicting signals, poor macro alignment, event ambiguity.
+  Use POSITIVE adjustments for: strong cross-source confirmation, clear macro tailwind, high-impact event.
+- Do NOT invent trade ideas. Do NOT speculate beyond what the signals indicate.
+- summary must be one plain-English sentence a non-expert can understand.
+- thesis must be 1-2 sentences on what happened and why it matters quantitatively.
 
 Respond ONLY in valid JSON with no preamble:
 {{
-  "is_opportunity": <bool>,
-  "confidence": <0.0-1.0>,
-  "summary": "<one sentence, plain English, for a non-expert user>",
-  "thesis": "<2-3 sentences: why signals correlate, what the trade is>",
-  "action": "<buy|sell|watch>",
-  "tickers": ["<symbols>"],
-  "expected_return_pct": <number sourced from backtest>,
-  "hold_days": <suggested holding period>,
-  "stop_loss_pct": <e.g. 0.03>,
-  "historical_context": "<note on similar past setups, or null>",
-  "macro_notes": "<how current macro affects this trade, or null>"
+  "event_class": "<earnings_surprise|macro_shift|conviction_shift|volume_anomaly|news_catalyst|regulatory|sector_rotation|liquidity_event|other>",
+  "affected_sectors": {{"<sector>": "<positive|negative|neutral>"}},
+  "confidence_adjustment": <float -0.20 to +0.20>,
+  "macro_alignment": "<strong|moderate|weak|negative>",
+  "summary": "<one sentence, plain English>",
+  "thesis": "<1-2 sentences: what happened and why it matters>",
+  "notes": "<historical context if relevant, or null>"
 }}"""

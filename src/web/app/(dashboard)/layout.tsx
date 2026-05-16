@@ -3,15 +3,25 @@ import { redirect } from "next/navigation"
 import { NavSidebar } from "@/components/layout/NavSidebar"
 import { ToastContainer } from "@/components/ui/Toast"
 import { db } from "@/lib/db"
+import type { Session } from "next-auth"
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const session = await auth()
-  if (!session) redirect("/auth/signin")
+  let session: Session | null = null
+  try {
+    session = await auth() as Session | null
+  } catch {
+    redirect("/auth/signin")
+  }
+  if (!session?.user) redirect("/auth/signin")
 
   const userId = (session.user as { id?: string }).id
   if (userId) {
-    const res = await db.query("SELECT onboarding_complete FROM users WHERE id=$1", [userId])
-    if (res.rows[0] && !res.rows[0].onboarding_complete) redirect("/onboarding")
+    try {
+      const res = await db.query("SELECT onboarding_complete FROM users WHERE id=$1", [userId])
+      if (res.rows[0] && !res.rows[0].onboarding_complete) redirect("/onboarding")
+    } catch {
+      // DB unavailable — allow through, page-level queries will surface the error
+    }
   }
 
   return (

@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl ca-certificates netcat-openbsd && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY scripts ./scripts
+
+RUN pip install --upgrade pip && \
+    pip install . && \
+    pip install openai>=1.30 sentence-transformers>=2.7 && \
+    pip install debugpy
+
+CMD ["python", "-m", "ai_correlator.__main__"]

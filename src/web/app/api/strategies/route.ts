@@ -3,7 +3,7 @@ import { db } from "@/lib/db"
 
 export async function GET(req: Request) {
   const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
+  if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
 
   const userId = (session.user as { id?: string }).id
   const { searchParams } = new URL(req.url)
@@ -42,10 +42,20 @@ export async function GET(req: Request) {
        ORDER BY ts DESC LIMIT 6`
     )
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const n = (v: any) => (v != null ? Number(v) : null)
     return Response.json({
       ...strat,
-      signals: sigRes.rows,
-      macro: macroRes.rows,
+      confidence: n(strat.confidence),
+      expected_return_pct: n(strat.expected_return_pct),
+      stop_loss_pct: n(strat.stop_loss_pct),
+      win_rate: n(strat.win_rate),
+      avg_return_pct: n(strat.avg_return_pct),
+      max_drawdown_pct: n(strat.max_drawdown_pct),
+      sharpe: n(strat.sharpe),
+      sample_size: n(strat.sample_size),
+      signals: sigRes.rows.map((r) => ({ ...r, score: n(r.score) })),
+      macro: macroRes.rows.map((r) => ({ ...r, value: n(r.value) })),
     })
   }
 
@@ -68,12 +78,24 @@ export async function GET(req: Request) {
   query += " ORDER BY s.created_at DESC LIMIT 100"
 
   const res = await db.query(query, params)
-  return Response.json(res.rows)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const n = (v: any) => (v != null ? Number(v) : null)
+  const rows = res.rows.map((r) => ({
+    ...r,
+    confidence: n(r.confidence),
+    expected_return_pct: n(r.expected_return_pct),
+    stop_loss_pct: n(r.stop_loss_pct),
+    win_rate: n(r.win_rate),
+    avg_return_pct: n(r.avg_return_pct),
+    max_drawdown_pct: n(r.max_drawdown_pct),
+    sample_size: n(r.sample_size),
+  }))
+  return Response.json(rows)
 }
 
 export async function PATCH(req: Request) {
   const session = await auth()
-  if (!session) return Response.json({ error: "unauthorized" }, { status: 401 })
+  if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
 
   const userId = (session.user as { id?: string }).id
   const body = await req.json()

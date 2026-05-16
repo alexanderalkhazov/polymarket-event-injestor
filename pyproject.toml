@@ -11,9 +11,8 @@ dependencies = [
     "asyncpg>=0.29",
     # Redis
     "redis>=5.0",
-    # AI
+    # AI (Groq via openai-compatible SDK)
     "openai>=1.30",
-    "sentence-transformers>=2.7",
     # Data sources
     "yfinance>=0.2.40",
     "requests>=2.32.0",
@@ -22,7 +21,6 @@ dependencies = [
     # Data processing
     "pandas>=2.2",
     "ta>=0.11",
-    "vectorbt>=0.26",
     "numpy>=1.26",
     # Schema / config
     "pydantic>=2.12",
