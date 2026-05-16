@@ -20,10 +20,23 @@ export interface Strategy {
   created_at: string
 }
 
-export function useStrategyStream(): { strategies: Strategy[]; connected: boolean } {
+export function useStrategyStream(): { strategies: Strategy[]; connected: boolean; loaded: boolean } {
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [connected, setConnected] = useState(false)
+  const [loaded, setLoaded] = useState(false)
 
+  // Initial load from DB
+  useEffect(() => {
+    fetch("/api/strategies")
+      .then((r) => r.json())
+      .then((data: Strategy[]) => {
+        if (Array.isArray(data)) setStrategies(data.slice(0, 100))
+      })
+      .catch(() => {})
+      .finally(() => setLoaded(true))
+  }, [])
+
+  // Real-time SSE for new strategies
   useEffect(() => {
     let es: EventSource
     let retry: ReturnType<typeof setTimeout>
@@ -36,9 +49,12 @@ export function useStrategyStream(): { strategies: Strategy[]; connected: boolea
       es.onmessage = (e) => {
         try {
           const s: Strategy = JSON.parse(e.data)
-          setStrategies((prev) => [s, ...prev].slice(0, 100))
+          setStrategies((prev) => {
+            if (prev.some((p) => p.id === s.id)) return prev
+            return [s, ...prev].slice(0, 100)
+          })
         } catch {
-          // ignore parse errors (e.g. heartbeat comments)
+          // ignore heartbeat comments / parse errors
         }
       }
 
@@ -57,5 +73,5 @@ export function useStrategyStream(): { strategies: Strategy[]; connected: boolea
     }
   }, [])
 
-  return { strategies, connected }
+  return { strategies, connected, loaded }
 }

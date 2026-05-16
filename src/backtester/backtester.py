@@ -16,7 +16,9 @@ class SignalBacktester:
 
     async def estimate(self, signals: list[dict]) -> dict:
         """Return statistical estimates for this signal cluster. Never gates or blocks."""
-        symbol = signals[0]["symbol"]
+        # Prefer real stock tickers (news/analytics) over polymarket hex IDs
+        ticker_signals = [s for s in signals if s["source"] in ("news", "analytics")]
+        symbol = ticker_signals[0]["symbol"] if ticker_signals else signals[0]["symbol"]
         ohlcv = await self._load_ohlcv(symbol)
         if ohlcv is None or len(ohlcv) < 60:
             return self._empty(symbol, signals, "insufficient history")
@@ -92,7 +94,9 @@ class SignalBacktester:
             )
             if not rows:
                 return None
-            df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
+            df = pd.DataFrame([dict(r) for r in rows])
+            for col in ("open", "high", "low", "close", "volume"):
+                df[col] = pd.to_numeric(df[col], errors="coerce")
             return df.set_index("time").sort_index()
         except Exception as exc:
             logger.error("Failed to load OHLCV for %s: %s", symbol, exc)
@@ -108,36 +112,43 @@ class SignalBacktester:
                 return None
             return pd.Series(
                 {r["time"]: float(r["value"]) for r in rows}
-            ).reindex(index, method="ffill")
+            ).reindex(pd.DatetimeIndex(index), method="ffill")
         except Exception:
             return None
 
     async def _find_similar_setups(self, signals: list[dict], ohlcv: pd.DataFrame) -> list:
-        mask = pd.Series(True, index=ohlcv.index)
+        mask = pd.Series(False, index=ohlcv.index)
+        matched_any = False
         for s in signals:
+            sub = pd.Series(False, index=ohlcv.index)
             if s["type"] == "volume_spike":
                 avg30 = ohlcv["volume"].rolling(30).mean()
-                mask &= ohlcv["volume"] > 2 * avg30
+                sub = ohlcv["volume"] > 1.8 * avg30
+                matched_any = True
             elif s["type"] == "rsi_extreme":
                 delta = ohlcv["close"].diff()
                 gain = delta.clip(lower=0).rolling(14).mean()
                 loss = (-delta).clip(lower=0).rolling(14).mean()
                 rs = gain / loss.replace(0, float("nan"))
                 rsi = 100 - 100 / (1 + rs)
-                if s.get("direction") == "up":
-                    mask &= rsi > 75
-                else:
-                    mask &= rsi < 25
-            elif s["type"] == "momentum":
+                sub = rsi > 72 if s.get("direction") == "up" else rsi < 28
+                matched_any = True
+            elif s["type"] in ("momentum", "news_catalyst"):
                 chg = ohlcv["close"].pct_change(1)
-                if s.get("direction") == "up":
-                    mask &= chg > 0.05
-                else:
-                    mask &= chg < -0.05
+                sub = chg > 0.04 if s.get("direction") == "up" else chg < -0.04
+                matched_any = True
             elif s["type"] == "conviction_shift":
                 vix = await self._load_macro("VIXCLS", ohlcv.index)
                 if vix is not None:
-                    mask &= vix > vix.rolling(20).mean() * 1.2
+                    sub = vix > vix.rolling(20).mean() * 1.1
+                    matched_any = True
+            elif s["type"] == "options_unusual":
+                avg30 = ohlcv["volume"].rolling(30).mean()
+                sub = ohlcv["volume"] > 1.5 * avg30
+                matched_any = True
+            mask |= sub
+        if not matched_any:
+            return []
         return list(ohlcv.index[mask])
 
     def _forward_returns(self, ohlcv: pd.DataFrame, dates: list, hold_days: int) -> list[float]:

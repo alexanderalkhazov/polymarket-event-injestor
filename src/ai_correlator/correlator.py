@@ -35,23 +35,25 @@ def _get_groq() -> OpenAI:
     return _groq
 
 
-def _compute_base_confidence(bt: dict) -> float:
-    """Derive base confidence purely from backtest statistics."""
+def _compute_base_confidence(bt: dict, recent: list[dict]) -> float:
+    """Derive base confidence from backtest statistics, falling back to signal scores."""
     n = bt["sample_size"]
     if n == 0:
-        return 0.30
+        # No historical data — proxy from signal conviction
+        scores = [float(s.get("score") or 0) for s in recent]
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+        max_score = max(scores) if scores else 0.0
+        sources = {s["source"] for s in recent}
+        multi_source_boost = 0.08 if len(sources) >= 2 else 0.0
+        return max(0.0, min(0.65, avg_score * 0.5 + max_score * 0.3 + multi_source_boost))
 
     conf = 0.50
-    # Expectancy bonus: +0.15 max at 1.5% per-trade expectancy
     conf += min(0.15, bt["expectancy"] / 10.0)
-    # Sharpe bonus: +0.10 max at Sharpe=1.0
     conf += min(0.10, bt["sharpe"] / 10.0)
-    # Sample size penalty
     if n < 10:
         conf -= 0.15
     elif n < 30:
         conf -= 0.05
-    # Drawdown penalty
     if bt["max_drawdown_pct"] < -20:
         conf -= 0.10
     elif bt["max_drawdown_pct"] < -10:
@@ -156,7 +158,9 @@ async def _process(signal_id: str, db, tsdb, redis) -> None:
     ]
 
     # 5. AI structured classification (classifier role, not trade generator)
-    prompt = build_prompt(new_signal, recent, macro, bt)
+    # Cap prompt size: top 20 signals by score, deduplicated by source+type
+    recent_for_prompt = sorted(recent, key=lambda s: float(s.get("score") or 0), reverse=True)[:20]
+    prompt = build_prompt(new_signal, recent_for_prompt, macro, bt)
     try:
         resp = _get_groq().chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -170,7 +174,7 @@ async def _process(signal_id: str, db, tsdb, redis) -> None:
         analysis = {"confidence_adjustment": 0.0, "macro_alignment": "moderate"}
 
     # 6. Decision engine — statistics decide, AI adjusts
-    base_confidence = _compute_base_confidence(bt)
+    base_confidence = _compute_base_confidence(bt, recent)
     conf_adj = max(-0.20, min(0.20, float(analysis.get("confidence_adjustment", 0.0))))
     macro_boost = _MACRO_BOOST.get(analysis.get("macro_alignment", "moderate"), 0.0)
     final_confidence = max(0.0, min(1.0, base_confidence + conf_adj + macro_boost))

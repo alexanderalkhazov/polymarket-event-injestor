@@ -18,7 +18,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 ]
 
 export default function StrategyInboxPage() {
-  const { strategies, connected } = useStrategyStream()
+  const { strategies, connected, loaded } = useStrategyStream()
   const [selected, setSelected] = useState<Strategy | null>(null)
   const [filter, setFilter] = useState<Filter>("all")
   const [localStatuses, setLocalStatuses] = useState<Record<string, string>>({})
@@ -94,14 +94,14 @@ export default function StrategyInboxPage() {
           borderRight: selected ? "1px solid var(--border)" : "none",
           transition: "width 0.15s",
         }}>
-          {!connected && strategies.length === 0 && (
+          {!loaded && strategies.length === 0 && (
             <>
               <Skeleton height={120} />
               <Skeleton height={120} />
               <Skeleton height={80} />
             </>
           )}
-          {connected && strategies.length === 0 && (
+          {loaded && strategies.length === 0 && (
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center",
               justifyContent: "center", height: 300, gap: 10,

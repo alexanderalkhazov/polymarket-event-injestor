@@ -16,6 +16,15 @@ CREATE TABLE users (
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE subscriptions (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source     TEXT NOT NULL CHECK (source IN ('polymarket', 'news', 'analytics')),
+  symbol     TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, source, symbol)
+);
+
 CREATE TABLE signals (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   source        TEXT NOT NULL CHECK (source IN ('polymarket', 'news', 'analytics')),
