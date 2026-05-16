@@ -1,0 +1,22 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "App DB (signals, users, trades)",
+      "Group": "eventedge",
+      "Host": "postgres",
+      "Port": 5432,
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "MaintenanceDB": "eventedge"
+    },
+    "2": {
+      "Name": "Historical DB (OHLCV, macro)",
+      "Group": "eventedge",
+      "Host": "timescale",
+      "Port": 5432,
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "MaintenanceDB": "market_history"
+    }
+  }
+}

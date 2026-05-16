@@ -1,4 +1,5 @@
 services:
+  # ── Message broker ──────────────────────────────────────────────────────────
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     env_file:
@@ -21,245 +22,277 @@ services:
       retries: 20
       start_period: 30s
 
-  mongo:
-    image: mongo:6
+  # ── Databases ────────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
     ports:
-      - "27017:27017"
-    env_file:
-      - env/mongo.env
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eventedge
     volumes:
-      - mongo-data:/data/db
-
-  mongo-express:
-    image: mongo-express:latest
-    ports:
-      - "8081:8081"
-    env_file:
-      - env/mongo-express.env
-    depends_on:
-      - mongo
-    restart: on-failure
-
-  couchbase:
-    image: couchbase:community-7.6.2
-    ports:
-      - "8091:8091"   # Web UI
-      - "8092:8092"
-      - "8093:8093"   # N1QL
-      - "8094:8094"
-      - "11210:11210" # KV
-    volumes:
-      - couchbase-data:/opt/couchbase/var
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/app_schema.sql:/docker-entrypoint-initdb.d/01_app_schema.sql:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8091/ui/index.html"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d eventedge"]
       interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 15s
+      retries: 20
 
-  couchbase-init:
-    image: curlimages/curl:latest
+  timescale:
+    image: timescale/timescaledb:latest-pg16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: market_history
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+      - ./db/history_schema.sql:/docker-entrypoint-initdb.d/01_history_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d market_history"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@eventedge.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
     depends_on:
-      couchbase:
-        condition: service_healthy
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        echo "Step 1: Setting up node services..."
-        curl -sf -X POST http://couchbase:8091/node/controller/setupServices \
-          -d "services=kv%2Cn1ql%2Cindex" || echo "Services may already be set"
-        sleep 2
+      - postgres
+      - timescale
 
-        echo "Step 2: Setting memory quotas..."
-        curl -sf -X POST http://couchbase:8091/pools/default \
-          -d "memoryQuota=256" \
-          -d "indexMemoryQuota=256" || echo "Quotas may already be set"
-        sleep 1
-
-        echo "Step 3: Setting admin credentials..."
-        curl -sf -X POST http://couchbase:8091/settings/web \
-          -d "password=password" \
-          -d "username=Administrator" \
-          -d "port=SAME" || echo "Credentials may already be set"
-        sleep 2
-
-        echo "Step 4: Creating bucket 'polymarket'..."
-        curl -sf -X POST http://couchbase:8091/pools/default/buckets \
-          -u Administrator:password \
-          -d "name=polymarket" \
-          -d "ramQuota=128" \
-          -d "bucketType=couchbase" \
-          -d "flushEnabled=1" || echo "Bucket may already exist"
-        sleep 5
-
-        echo "Step 5: Creating named collections..."
-        for COLL in polymarket stock_news stock_analytics; do
-          curl -sf -X POST \
-            "http://couchbase:8091/pools/default/buckets/polymarket/scopes/_default/collections" \
-            -u Administrator:password \
-            -d "name=$$COLL" || echo "Collection $$COLL may already exist"
-          sleep 1
-        done
-
-        echo "Verifying..."
-        curl -sf -u Administrator:password http://couchbase:8091/pools/default/buckets | grep -q polymarket \
-          && echo "Couchbase init COMPLETE — bucket 'polymarket' with collections [polymarket, stock_news, stock_analytics] ready." \
-          || echo "WARNING: bucket verification failed"
-    restart: "no"
-
-  polymarket-event-producer:
+  # ── Python producers (dumb — fetch raw, publish to Kafka) ───────────────────
+  polymarket-producer:
     build: .
     depends_on:
       kafka:
         condition: service_healthy
-      mongo:
-        condition: service_started
+      postgres:
+        condition: service_healthy
     env_file:
-      - env/polymarket-producer.env
+      - env/python.env
+    environment:
+      SERVICE_NAME: polymarket-producer
     entrypoint:
       - /bin/bash
       - -c
       - |
-        echo "Waiting for MongoDB to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check MongoDB..."
-          nc -zv mongo 27017 && break
-          sleep 1
-        done
-        echo "MongoDB is ready!"
+        until nc -z kafka 29092; do sleep 1; done
         python -m event_detectors.polymarket_producer
-
-  stock-news-event-producer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      mongo:
-        condition: service_started
-    env_file:
-      - env/stock-news-producer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for MongoDB to be ready..."
-        for idx in {1..30}; do
-          nc -zv mongo 27017 && break
-          sleep 1
-        done
-        echo "MongoDB is ready!"
-        python -m event_detectors.stock_news_producer
     restart: on-failure
 
-  stock-analytics-event-producer:
+  news-producer:
     build: .
     depends_on:
       kafka:
         condition: service_healthy
-      mongo:
-        condition: service_started
+      postgres:
+        condition: service_healthy
     env_file:
-      - env/stock-analytics-producer.env
+      - env/python.env
+    environment:
+      SERVICE_NAME: news-producer
     entrypoint:
       - /bin/bash
       - -c
       - |
-        echo "Waiting for MongoDB to be ready..."
-        for idx in {1..30}; do
-          nc -zv mongo 27017 && break
-          sleep 1
-        done
-        echo "MongoDB is ready!"
-        python -m event_detectors.stock_analytics_producer
+        until nc -z kafka 29092; do sleep 1; done
+        python -m event_detectors.news_producer
     restart: on-failure
 
-  polymarket-event-consumer:
+  analytics-producer:
     build: .
     depends_on:
       kafka:
         condition: service_healthy
-      couchbase-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     env_file:
-      - env/polymarket-consumer.env
+      - env/python.env
+    environment:
+      SERVICE_NAME: analytics-producer
     entrypoint:
       - /bin/bash
       - -c
       - |
-        echo "Waiting for Kafka to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check Kafka..."
-          nc -zv kafka 29092 && break
-          sleep 1
-        done
-        echo "Kafka is ready!"
+        until nc -z kafka 29092; do sleep 1; done
+        python -m event_detectors.analytics_producer
+    restart: on-failure
+
+  # ── Python consumers (smart — detection logic lives here) ───────────────────
+  polymarket-consumer:
+    build: .
+    ports:
+      - "9101:9101"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - env/python.env
+    environment:
+      SERVICE_NAME: polymarket-consumer
+      PROMETHEUS_PORT: "9101"
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        until nc -z kafka 29092; do sleep 1; done
         python -m event_processors.polymarket_consumer
     restart: on-failure
 
-  stock-news-event-consumer:
+  news-consumer:
     build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      couchbase-init:
-        condition: service_completed_successfully
-    env_file:
-      - env/stock-news-consumer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for Kafka to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check Kafka..."
-          nc -zv kafka 29092 && break
-          sleep 1
-        done
-        echo "Kafka is ready!"
-        python -m event_processors.stock_news_consumer
-    restart: on-failure
-
-  stock-analytics-event-consumer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      couchbase-init:
-        condition: service_completed_successfully
-    env_file:
-      - env/stock-analytics-consumer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for Kafka to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check Kafka..."
-          nc -zv kafka 29092 && break
-          sleep 1
-        done
-        echo "Kafka is ready!"
-        python -m event_processors.stock_analytics_consumer
-    restart: on-failure
-
-  web-bff-api:
-    build: ./src/web-app/bff
-    depends_on:
-      mongo:
-        condition: service_started
-      couchbase:
-        condition: service_healthy
-    env_file:
-      - env/web-bff.env
     ports:
-      - "5001:5001"
+      - "9102:9102"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - env/python.env
+    environment:
+      SERVICE_NAME: news-consumer
+      PROMETHEUS_PORT: "9102"
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        until nc -z kafka 29092; do sleep 1; done
+        python -m event_processors.news_consumer
     restart: on-failure
 
+  analytics-consumer:
+    build: .
+    ports:
+      - "9103:9103"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - env/python.env
+    environment:
+      SERVICE_NAME: analytics-consumer
+      PROMETHEUS_PORT: "9103"
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        until nc -z kafka 29092; do sleep 1; done
+        python -m event_processors.analytics_consumer
+    restart: on-failure
+
+  # ── New Python services ──────────────────────────────────────────────────────
+  historical-ingestor:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+    env_file:
+      - env/python.env
+    environment:
+      SERVICE_NAME: historical-ingestor
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        python -m historical.ingestor
+    restart: on-failure
+
+  backtester:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+    env_file:
+      - env/python.env
+    environment:
+      SERVICE_NAME: backtester
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        python -m backtester.__main__
+    restart: on-failure
+
+  ai-correlator:
+    build: .
+    ports:
+      - "9105:9105"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - env/python.env
+    environment:
+      SERVICE_NAME: ai-correlator
+      PROMETHEUS_PORT: "9105"
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        python -m ai_correlator.__main__
+    restart: on-failure
+
+  # ── Frontend (Next.js App Router — UI + BFF in one) ─────────────────────────
+  nextjs:
+    build: ./src/web
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - env/nextjs.env
+    restart: on-failure
+
+  # ── Observability ─────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.54.1
-    depends_on:
-      - web-bff-api
     ports:
       - "9090:9090"
     volumes:
@@ -275,7 +308,7 @@ services:
     depends_on:
       - prometheus
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
@@ -284,18 +317,9 @@ services:
       - grafana-data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
 
-  web-client-ui:
-    build: ./src/web-app/web-client
-    depends_on:
-      - web-bff-api
-    env_file:
-      - env/web-client.env
-    ports:
-      - "5173:5173"
-    restart: on-failure
-
 volumes:
-  mongo-data:
-  couchbase-data:
+  postgres-data:
+  timescale-data:
+  pgadmin-data:
   prometheus-data:
   grafana-data:

@@ -1,20 +1,37 @@
 [project]
-name = "polymarket-intelligence-platform"
-version = "0.2.0"
-description = "Three-pipeline financial intelligence event streaming platform"
+name = "eventedge-ai"
+version = "0.3.0"
+description = "Algo trading system — three signal pipelines, backtester, Claude AI correlator"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # Kafka
     "confluent-kafka>=2.3.0",
-    "python-dotenv>=1.0.0",
-    "pymongo>=4.6.0",
-    "motor>=3.3.0",
+    # PostgreSQL (app DB + TimescaleDB)
+    "asyncpg>=0.29",
+    # Redis
+    "redis>=5.0",
+    # AI
+    "anthropic>=0.25",
+    "openai>=1.30",
+    # Data sources
+    "yfinance>=0.2.40",
     "requests>=2.32.0",
     "certifi>=2024.0.0",
+    "fredapi>=0.5",
+    # Data processing
+    "pandas>=2.2",
+    "pandas-ta>=0.3",
+    "vectorbt>=0.26",
+    "numpy>=1.26",
+    # Schema / config
     "pydantic>=2.12",
-    "couchbase>=4.1.0",
-    "yfinance>=0.2.40",
+    "python-dotenv>=1.0.0",
+    # Scheduling (historical ingestor)
+    "schedule>=1.2",
+    # Observability
     "prometheus-client>=0.21.1",
+    "structlog>=24.0",
 ]
 
 [project.optional-dependencies]
