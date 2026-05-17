@@ -99,7 +99,7 @@ export default function RegisterPage() {
             disabled={loading}
             style={{
               background: loading ? "var(--bg3)" : "var(--green)", border: "none",
-              borderRadius: 8, padding: "12px", color: loading ? "var(--muted)" : "#000",
+              borderRadius: 8, padding: "12px", color: loading ? "var(--muted)" : "#fff",
               cursor: loading ? "default" : "pointer", fontWeight: 700, fontSize: 14, marginTop: 4,
             }}
           >

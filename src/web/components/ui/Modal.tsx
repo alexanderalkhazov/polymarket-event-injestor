@@ -12,7 +12,7 @@ interface ModalProps {
 export function Modal({ title, children, onCancel, onConfirm, confirmLabel = "Confirm", danger }: ModalProps) {
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", backdropFilter: "blur(2px)",
       display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999,
     }}>
       <div style={{
@@ -30,7 +30,7 @@ export function Modal({ title, children, onCancel, onConfirm, confirmLabel = "Co
           </button>
           <button onClick={onConfirm} style={{
             background: danger ? "var(--red)" : "var(--green)", border: "none",
-            borderRadius: 8, padding: "8px", color: "#000", cursor: "pointer",
+            borderRadius: 8, padding: "8px", color: "#fff", cursor: "pointer",
             fontWeight: 600, fontSize: 13,
           }}>
             {confirmLabel}

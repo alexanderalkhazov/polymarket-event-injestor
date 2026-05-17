@@ -13,7 +13,8 @@ function SignInForm() {
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
-  const callbackUrl = params.get("callbackUrl") ?? "/"
+  const raw = params.get("callbackUrl") ?? "/"
+  const callbackUrl = raw.startsWith("/") && !raw.startsWith("/.") && !raw.includes("//") ? raw : "/"
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -22,7 +23,7 @@ function SignInForm() {
     const res = await signIn("credentials", { email, password, redirect: false })
     setLoading(false)
     if (res?.ok) {
-      router.push(callbackUrl)
+      window.location.href = callbackUrl
     } else {
       setError("Invalid email or password")
     }
@@ -60,7 +61,7 @@ function SignInForm() {
         )}
         <button type="submit" disabled={loading} style={{
           background: loading ? "var(--bg3)" : "var(--green)", border: "none",
-          borderRadius: 8, padding: "12px", color: loading ? "var(--muted)" : "#000",
+          borderRadius: 8, padding: "12px", color: loading ? "var(--muted)" : "#fff",
           cursor: loading ? "default" : "pointer", fontWeight: 700, fontSize: 14, marginTop: 4,
         }}>
           {loading ? "Signing in…" : "Sign in"}

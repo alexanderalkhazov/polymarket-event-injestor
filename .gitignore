@@ -43,3 +43,9 @@ Thumbs.db
 # ML model artifacts (run src/ml/train.py locally to generate)
 models/*.json
 models/*.pkl
+
+./claude 
+/claude 
+claude*
+
+node_modules/

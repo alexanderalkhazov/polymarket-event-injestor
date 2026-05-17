@@ -28,9 +28,9 @@ export function ToastContainer() {
     <div style={{ position: "fixed", bottom: 20, right: 20, display: "flex", flexDirection: "column", gap: 8, zIndex: 1000 }}>
       {toasts.map((t) => (
         <div key={t.id} style={{
-          background: "var(--bg2)", border: "1px solid var(--border2)",
-          borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "var(--text)",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+          background: "var(--bg1)", border: "1px solid var(--border2)",
+          borderRadius: 10, padding: "12px 16px", fontSize: 13, color: "var(--text)",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
         }}>
           {t.message}
         </div>

@@ -31,7 +31,10 @@ export async function POST(req: Request) {
   const userRes = await db.query("SELECT * FROM users WHERE id=$1", [userId])
   const user = userRes.rows[0]
 
-  const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id ?? undefined, user.alpaca_secret ?? undefined)
+  if (!user.alpaca_key_id || !user.alpaca_secret)
+    return Response.json({ error: "Alpaca account not connected — add your API keys in Settings" }, { status: 422 })
+
+  const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
   const account = await alpaca.getAccount()
   const equity = parseFloat(account.equity)
   const sizing = strat.sizing_usd ?? equity * strat.sizing_pct
@@ -73,19 +76,38 @@ export async function GET(req: Request) {
     const userRes = await db.query("SELECT * FROM users WHERE id=$1", [userId])
     const user = userRes.rows[0]
     if (!user) return Response.json({ error: "not found" }, { status: 404 })
-    const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id ?? undefined, user.alpaca_secret ?? undefined)
+    if (!user.alpaca_key_id || !user.alpaca_secret)
+      return Response.json({ connected: false })
+    const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
     const account = await alpaca.getAccount()
     return Response.json({
+      connected: true,
       equity: parseFloat(account.equity),
       cash: parseFloat(account.cash),
+      buying_power: parseFloat(account.buying_power ?? "0"),
       unrealized_pl: parseFloat(account.unrealized_pl ?? "0"),
     })
   }
+
+  const userRes = await db.query("SELECT alpaca_key_id, alpaca_secret, is_paper FROM users WHERE id=$1", [userId])
+  const user = userRes.rows[0]
+  const hasAlpaca = !!(user?.alpaca_key_id && user?.alpaca_secret)
 
   const [tradesRes, posRes] = await Promise.all([
     db.query("SELECT * FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100", [userId]),
     db.query("SELECT * FROM positions WHERE user_id=$1", [userId]),
   ])
 
-  return Response.json({ trades: tradesRes.rows, positions: posRes.rows })
+  let alpacaOrders: unknown[] = []
+  if (hasAlpaca) {
+    try {
+      const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      alpacaOrders = await alpaca.getOrders({ status: "all", limit: 50 }) as any[]
+    } catch {
+      // Alpaca unreachable — return empty rather than failing
+    }
+  }
+
+  return Response.json({ trades: tradesRes.rows, positions: posRes.rows, alpacaOrders, hasAlpaca })
 }

@@ -7,7 +7,7 @@ export async function GET() {
 
   const userId = (session.user as { id?: string }).id
   const res = await db.query(
-    "SELECT risk_level, is_paper, alpaca_key_id FROM users WHERE id=$1",
+    "SELECT risk_level, is_paper, alpaca_key_id, onboarding_complete FROM users WHERE id=$1",
     [userId]
   )
   const user = res.rows[0]
@@ -17,6 +17,7 @@ export async function GET() {
     risk_level: user.risk_level,
     is_paper: user.is_paper,
     alpaca_key_id: user.alpaca_key_id ?? "",
+    onboarding_complete: user.onboarding_complete,
   })
 }
 
@@ -30,6 +31,12 @@ export async function PATCH(req: Request) {
   const updates: string[] = []
   const params: unknown[] = []
 
+  if (body.risk_level !== undefined) {
+    const valid = ["conservative", "moderate", "aggressive"]
+    if (!valid.includes(body.risk_level))
+      return Response.json({ error: "invalid risk_level" }, { status: 400 })
+    params.push(body.risk_level); updates.push(`risk_level=$${params.length}`)
+  }
   if (body.alpaca_key_id !== undefined) {
     params.push(body.alpaca_key_id); updates.push(`alpaca_key_id=$${params.length}`)
   }
@@ -38,6 +45,9 @@ export async function PATCH(req: Request) {
   }
   if (body.is_paper !== undefined) {
     params.push(body.is_paper); updates.push(`is_paper=$${params.length}`)
+  }
+  if (body.onboarding_complete !== undefined) {
+    params.push(body.onboarding_complete); updates.push(`onboarding_complete=$${params.length}`)
   }
 
   if (!updates.length) return Response.json({ ok: true })

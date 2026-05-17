@@ -78,7 +78,7 @@ export function MarketCategorySelector({ initialCategories = [], onChange }: Pro
                 background: isActive ? "var(--green)" : "var(--border)",
                 transition: "background 0.15s",
               }} />
-              <span style={{ fontWeight: 600, fontSize: 13, color: "var(--fg)" }}>
+              <span style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>
                 {cat.label}
               </span>
               {isLoading && (

@@ -35,7 +35,7 @@ from .fan_out import fan_out_to_users
 
 logger = logging.getLogger(__name__)
 
-CONFIDENCE_THRESHOLD = 0.65
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
 MODEL_PATH = Path(os.getenv("MODEL_DIR", "/app/models")) / "scoring_model.json"
 SHAP_PATH  = Path(os.getenv("MODEL_DIR", "/app/models")) / "shap_explainer.pkl"
 
@@ -278,18 +278,25 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     signal = dict(signal)
     symbol = signal["symbol"]
 
-    # 2. Fetch most recent feature row
-    feat_row = await tsdb.fetchrow(
-        "SELECT * FROM features WHERE symbol=$1 ORDER BY ts DESC LIMIT 1", symbol
-    )
-    if not feat_row:
-        logger.debug("No feature row for %s — dropping signal %s", symbol, signal_id)
-        return
-    feat_dict = dict(feat_row)
+    # 2. Fetch most recent feature row (polymarket signals have no stock ticker — skip lookup)
+    feat_dict: dict = {}
+    if signal["source"] != "polymarket":
+        feat_row = await tsdb.fetchrow(
+            "SELECT * FROM features WHERE symbol=$1 ORDER BY ts DESC LIMIT 1", symbol
+        )
+        if not feat_row:
+            logger.debug("No feature row for %s — dropping signal %s", symbol, signal_id)
+            return
+        feat_dict = dict(feat_row)
 
-    # 3. Score
-    confidence, top_features = _score(feat_dict)
-    logger.info("Signal %s: symbol=%s confidence=%.3f", signal_id[:8], symbol, confidence)
+    # 3. Score — polymarket uses raw conviction score directly
+    if signal["source"] == "polymarket":
+        raw_score = float(signal.get("score") or 0)
+        confidence = min(raw_score, 1.0)
+        top_features: list[dict] = []
+    else:
+        confidence, top_features = _score(feat_dict)
+    logger.info("Signal %s: symbol=%s source=%s confidence=%.3f", signal_id[:8], symbol, signal["source"], confidence)
 
     # 4. Gate
     if confidence < CONFIDENCE_THRESHOLD:

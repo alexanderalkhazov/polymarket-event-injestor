@@ -50,8 +50,9 @@ export default function StrategyInboxPage() {
       <Topbar title="Strategy Inbox" />
 
       <div style={{
-        display: "flex", gap: 4, padding: "10px 16px",
+        display: "flex", gap: 6, padding: "12px 20px",
         borderBottom: "1px solid var(--border)", flexShrink: 0,
+        background: "var(--bg1)",
       }}>
         {FILTERS.map((f) => {
           const count = f.key === "all"
@@ -65,18 +66,22 @@ export default function StrategyInboxPage() {
               key={f.key}
               onClick={() => setFilter(f.key)}
               style={{
-                background: filter === f.key ? "var(--bg3)" : "transparent",
-                border: filter === f.key ? "1px solid var(--border)" : "1px solid transparent",
-                borderRadius: 6, padding: "5px 12px", cursor: "pointer",
-                fontSize: 12, color: filter === f.key ? "var(--text)" : "var(--muted)",
-                display: "flex", alignItems: "center", gap: 6,
+                background: filter === f.key ? "var(--primary)" : "transparent",
+                border: "none",
+                borderRadius: 8, padding: "6px 14px", cursor: "pointer",
+                fontSize: 13, fontWeight: filter === f.key ? 600 : 400,
+                color: filter === f.key ? "#fff" : "var(--muted)",
+                display: "flex", alignItems: "center", gap: 7,
+                transition: "background 0.12s, color 0.12s",
               }}
             >
               {f.label}
               {count > 0 && (
                 <span style={{
-                  background: "var(--bg4)", borderRadius: 10, padding: "1px 6px",
-                  fontSize: 10, color: "var(--dim)", fontFamily: "var(--font-dm-mono)",
+                  background: filter === f.key ? "rgba(255,255,255,0.25)" : "var(--bg3)",
+                  borderRadius: 10, padding: "1px 7px",
+                  fontSize: 11, fontFamily: "var(--font-dm-mono)",
+                  color: filter === f.key ? "#fff" : "var(--dim)",
                 }}>
                   {count}
                 </span>
@@ -88,9 +93,9 @@ export default function StrategyInboxPage() {
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <div style={{
-          width: selected ? "340px" : "100%", flexShrink: 0,
-          overflowY: "auto", padding: 16,
-          display: "flex", flexDirection: "column", gap: 10,
+          width: selected ? "380px" : "100%", flexShrink: 0,
+          overflowY: "auto", padding: "20px",
+          display: "flex", flexDirection: "column", gap: 14,
           borderRight: selected ? "1px solid var(--border)" : "none",
           transition: "width 0.15s",
         }}>

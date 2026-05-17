@@ -25,7 +25,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "52px 1fr", height: "100vh", overflow: "hidden" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", height: "100vh", overflow: "hidden" }}>
       <NavSidebar />
       <main style={{ overflow: "auto", display: "flex", flexDirection: "column" }}>
         {children}

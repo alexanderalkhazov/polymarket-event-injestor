@@ -5,11 +5,9 @@ import argparse
 import asyncio
 import logging
 import os
-import time
 from datetime import datetime, timezone, timedelta
 
 import asyncpg
-import schedule
 
 from .builder import FeatureBuilder, get_symbols
 from .label_filler import fill_labels
@@ -67,21 +65,15 @@ async def main_async(backfill: bool) -> None:
             await fill_labels(pool)
             return
 
-        # Normal mode: run once immediately, then hourly
+        # Normal mode: run once immediately, then every hour using asyncio (no nested asyncio.run)
         await run_hourly(pool)
-
-        def hourly_job() -> None:
-            asyncio.run(run_hourly(pool))
-
-        def nightly_job() -> None:
-            asyncio.run(fill_labels(pool))
-
-        schedule.every().hour.do(hourly_job)
-        schedule.every().day.at("01:00").do(nightly_job)
-
+        ticks = 0
         while True:
-            schedule.run_pending()
-            time.sleep(30)
+            await asyncio.sleep(3600)
+            await run_hourly(pool)
+            ticks += 1
+            if ticks % 24 == 0:
+                await fill_labels(pool)
     finally:
         await pool.close()
 

@@ -15,8 +15,11 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-ALL_SYMBOLS = ["USO", "XOM", "SPY", "QQQ", "GLD", "TLT", "LNG", "XLE"]
-DEV_SYMBOLS = ["USO", "SPY", "QQQ"]
+ALL_SYMBOLS = ["USO", "XOM", "SPY", "QQQ", "GLD", "TLT", "LNG", "XLE",
+               "AAPL", "MSFT", "NVDA", "TSLA", "META", "GOOGL", "AMZN",
+               "AMD", "INTC", "NFLX", "COIN", "PLTR"]
+DEV_SYMBOLS  = ["SPY", "QQQ", "USO", "AAPL", "MSFT", "NVDA", "TSLA",
+                "META", "GOOGL", "AMZN", "AMD", "INTC", "NFLX", "COIN", "PLTR"]
 
 
 def get_symbols() -> list[str]:

@@ -24,74 +24,92 @@ function relTime(iso: string) {
 export function StrategyCard({ strategy: s, selected, onClick }: StrategyCardProps) {
   const accentColor =
     s.action === "buy" ? "var(--green)" : s.action === "sell" ? "var(--red)" : "var(--amber)"
+  const accentBg =
+    s.action === "buy" ? "var(--green-bg)" : s.action === "sell" ? "var(--red-bg)" : "var(--amber-bg)"
   const isDropped = s.status === "dismissed" || s.status === "expired"
-  const isExecuted = s.status === "executed"
 
   return (
     <div
       onClick={onClick}
       style={{
-        background: selected ? "var(--bg2)" : "var(--bg1)",
-        border: `1px solid ${selected ? accentColor : "var(--border)"}`,
-        borderTop: `2px solid ${accentColor}`,
-        borderRadius: 10, padding: "14px", cursor: isDropped ? "default" : "pointer",
+        background: "var(--bg1)",
+        borderRadius: 14,
+        boxShadow: selected
+          ? `0 0 0 2px ${accentColor}, var(--shadow-card)`
+          : "var(--shadow-card)",
+        padding: "20px 22px",
+        cursor: isDropped ? "default" : "pointer",
         opacity: isDropped ? 0.45 : 1,
-        transition: "border-color 0.1s, background 0.1s",
+        transition: "box-shadow 0.15s",
+        borderLeft: `4px solid ${accentColor}`,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <ActionBadge action={s.action} />
-        <span style={{ fontFamily: "var(--font-dm-mono)", fontSize: 13, fontWeight: 600 }}>
-          {(s.tickers ?? []).join(" / ")}
-        </span>
-        <span style={{ marginLeft: "auto", fontFamily: "var(--font-dm-mono)", fontSize: 11, color: "var(--muted)" }}>
-          conf {Math.round((s.confidence ?? 0) * 100)}%
-        </span>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: 9,
+          background: accentBg,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 16, color: accentColor }}>
+            {s.action === "buy" ? "↑" : s.action === "sell" ? "↓" : "◉"}
+          </span>
+        </div>
+        <div>
+          <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
+            {(s.tickers ?? []).join(" / ")}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 1 }}>
+            {Math.round((s.confidence ?? 0) * 100)}% confidence · {relTime(s.created_at)}
+          </div>
+        </div>
+        <div style={{ marginLeft: "auto" }}>
+          <ActionBadge action={s.action} />
+        </div>
       </div>
 
-      <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
+      {/* Summary */}
+      <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
         {s.summary}
       </p>
 
-      {!isExecuted && s.expected_return_pct != null && (
+      {/* Stats */}
+      {s.expected_return_pct != null && (
         <div style={{
           display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
-          borderTop: "1px solid var(--border)", paddingTop: 8, gap: 8,
+          gap: 0,
+          background: "var(--bg2)",
+          borderRadius: 10,
+          overflow: "hidden",
+          marginBottom: 14,
         }}>
-          <div>
-            <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--dim)" }}>Exp. Return</div>
-            <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 12, color: "var(--green)" }}>
-              +{s.expected_return_pct}%
+          {[
+            { label: "Exp. Return", value: `+${s.expected_return_pct}%`, color: "var(--green)" },
+            { label: "Win Rate", value: s.win_rate != null ? `${Math.round(s.win_rate * 100)}%` : "—" },
+            { label: "Stop Loss", value: s.stop_loss_pct != null ? `−${Math.round(s.stop_loss_pct * 100)}%` : "—", color: "var(--red)" },
+            { label: "Hold", value: s.hold_days != null ? `${s.hold_days}d` : "—", color: "var(--muted)" },
+          ].map((stat, i, arr) => (
+            <div key={stat.label} style={{
+              padding: "10px 14px",
+              borderRight: i < arr.length - 1 ? "1px solid var(--border)" : "none",
+            }}>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--dim)", marginBottom: 4 }}>
+                {stat.label}
+              </div>
+              <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 14, fontWeight: 700, color: stat.color ?? "var(--text)" }}>
+                {stat.value}
+              </div>
             </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--dim)" }}>Win Rate</div>
-            <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 12 }}>
-              {s.win_rate != null ? `${Math.round(s.win_rate * 100)}%` : "—"}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--dim)" }}>Stop</div>
-            <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 12, color: "var(--red)" }}>
-              {s.stop_loss_pct != null ? `−${Math.round(s.stop_loss_pct * 100)}%` : "—"}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--dim)" }}>Hold</div>
-            <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 12, color: "var(--muted)" }}>
-              {s.hold_days != null ? `${s.hold_days}d` : "—"}
-            </div>
-          </div>
+          ))}
         </div>
       )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-        {(s.sources ?? ["polymarket", "news", "analytics"].slice(0, 1)).map((src: string) => (
+      {/* Sources */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {(s.sources ?? []).map((src: string) => (
           <SourceChip key={src} source={src} />
         ))}
-        <span style={{ marginLeft: "auto", fontFamily: "var(--font-dm-mono)", fontSize: 10, color: "var(--dim)" }}>
-          {relTime(s.created_at)}
-        </span>
       </div>
     </div>
   )
