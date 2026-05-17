@@ -9,13 +9,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
+import time
+
 import asyncpg
 import redis.asyncio as aioredis
 from confluent_kafka import Consumer, KafkaError
 
 logger = logging.getLogger(__name__)
 
-MIN_SIGNAL_SCORE = 0.10
+# Quality gates — keep only meaningful conviction moves
+MIN_SIGNAL_SCORE = 0.40   # was 0.10; score formula: abs*5 + pct*1.5, so 0.40 = ~8pp abs move
+MIN_LIQUIDITY    = 2_000  # ignore thin markets (< $2k liquidity)
+MARKET_COOLDOWN_S = 7_200  # 2 hours between signals for the same market
 
 
 def _score_conviction(
@@ -27,7 +32,7 @@ def _score_conviction(
     elif volume and volume > 50_000:
         score = min(1.0, score * 1.05)
     score = round(score, 4)
-    urgency = "high" if score >= 0.60 else "medium" if score >= 0.35 else "low"
+    urgency = "high" if score >= 0.70 else "medium" if score >= 0.50 else "low"
     ci = [round(max(0.0, score - 0.12), 3), round(min(1.0, score + 0.12), 3)]
     return score, urgency, ci
 
@@ -54,6 +59,7 @@ class PolymarketConsumer:
         self._timescale_url = timescale_url
         self._redis_url = redis_url
         self._states: Dict[str, MarketState] = {}
+        self._last_signal_ts: Dict[str, float] = {}  # market_id → last signal time
         self._pool: Optional[asyncpg.Pool] = None
         self._tsdb: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
@@ -144,6 +150,17 @@ class PolymarketConsumer:
         )
         if signal_score < MIN_SIGNAL_SCORE:
             return
+
+        # Skip thin markets
+        liquidity = raw.get("liquidity") or 0
+        if liquidity < MIN_LIQUIDITY:
+            return
+
+        # Per-market cooldown
+        now_ts = time.time()
+        if now_ts - self._last_signal_ts.get(market_id, 0) < MARKET_COOLDOWN_S:
+            return
+        self._last_signal_ts[market_id] = now_ts
 
         direction = "up" if yes_price > prev else "down"
         signal_id = str(uuid.uuid4())

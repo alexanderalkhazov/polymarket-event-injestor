@@ -14,6 +14,8 @@ export interface Strategy {
   hold_days: number | null
   stop_loss_pct: number | null
   win_rate: number | null
+  avg_return_pct: number | null
+  max_drawdown_pct: number | null
   sample_size: number | null
   rationale: string
   expires_at: string

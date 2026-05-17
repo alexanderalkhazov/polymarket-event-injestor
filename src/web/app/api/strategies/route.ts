@@ -118,9 +118,9 @@ export async function PATCH(req: Request) {
     return Response.json({ ok: true })
   }
 
-  // Strategy status update (dismiss / expire)
+  // Strategy status update (dismiss / restore / expire)
   const { id, status } = body
-  if (!["dismissed", "expired"].includes(status))
+  if (!["dismissed", "expired", "pending"].includes(status))
     return Response.json({ error: "invalid status" }, { status: 400 })
 
   await db.query(

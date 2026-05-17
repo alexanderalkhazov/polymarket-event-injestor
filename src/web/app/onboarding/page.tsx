@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { RiskSelector } from "@/components/settings/RiskSelector"
-import { MarketCategorySelector } from "@/components/settings/MarketCategorySelector"
+import { CategoryCatalog } from "@/components/settings/CategoryCatalog"
 import { AlpacaConnect } from "@/components/settings/AlpacaConnect"
 import { showToast } from "@/components/ui/Toast"
 
@@ -67,13 +67,6 @@ const FEATURES = [
   { icon: "🔐", text: "You execute trades via your own Alpaca account" },
 ]
 
-// ─── Category labels for summary ──────────────────────────────────────────────
-const CAT_LABELS: Record<string, string> = {
-  oil_energy: "Oil & Energy", us_equities: "US Equities",
-  crypto: "Crypto", rates_macro: "Rates & Macro",
-  commodities: "Commodities", fx: "FX",
-}
-
 const RISK_LABELS: Record<string, { label: string; sub: string }> = {
   conservative: { label: "Conservative", sub: "1% per trade" },
   moderate:     { label: "Moderate",     sub: "3% per trade" },
@@ -96,12 +89,12 @@ export default function OnboardingPage() {
     Promise.all([
       fetch("/api/user").then(r => r.ok ? r.json() : {}),
       fetch("/api/categories").then(r => r.ok ? r.json() : {}),
-    ]).then(([user, cats]) => {
-      const activeCats: string[] = cats.categories ?? []
+    ]).then(([user, cats]: [Record<string, unknown>, Record<string, unknown>]) => {
+      const activeCats: string[] = (cats.categories as string[]) ?? []
       setCategories(activeCats)
-      if (user.risk_level) setRiskLevel(user.risk_level)
-      if (user.alpaca_key_id) setAlpacaKeyId(user.alpaca_key_id)
-      setIsPaper(user.is_paper ?? true)
+      if (user.risk_level) setRiskLevel(user.risk_level as string)
+      if (user.alpaca_key_id) setAlpacaKeyId(user.alpaca_key_id as string)
+      setIsPaper((user.is_paper as boolean) ?? true)
 
       // Determine resume step
       if (activeCats.length > 0 && user.alpaca_key_id) setStep(4)
@@ -251,7 +244,7 @@ export default function OnboardingPage() {
               subscribes you to the relevant tickers automatically.
             </p>
 
-            <MarketCategorySelector
+            <CategoryCatalog
               initialCategories={categories}
               onChange={setCategories}
             />
@@ -353,11 +346,7 @@ export default function OnboardingPage() {
               <div style={{ height: 1, background: "var(--border)" }} />
               <SummaryRow
                 label="Markets"
-                value={
-                  categories.length > 0
-                    ? categories.map(c => CAT_LABELS[c] ?? c).join(", ")
-                    : "None selected"
-                }
+                value={categories.length > 0 ? `${categories.length} subcategory${categories.length !== 1 ? "s" : ""} selected` : "None selected"}
               />
               <div style={{ height: 1, background: "var(--border)" }} />
               <SummaryRow

@@ -103,7 +103,8 @@ export async function GET(req: Request) {
     try {
       const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      alpacaOrders = await alpaca.getOrders({ status: "all", limit: 50 }) as any[]
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      alpacaOrders = await (alpaca as any).getOrders({ status: "all", limit: 50 })
     } catch {
       // Alpaca unreachable — return empty rather than failing
     }

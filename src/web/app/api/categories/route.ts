@@ -24,6 +24,13 @@ const SUBCATEGORY_SYMBOLS: Record<string, string[]> = {
   crypto_layer2:    ["MATIC-USD","ARB-USD","OP-USD","IMX-USD"],
   crypto_meme:      ["DOGE-USD","SHIB-USD","PEPE-USD","WIF-USD"],
   crypto_ai:        ["FET-USD","RNDR-USD","TAO-USD","AGIX-USD"],
+  // Legacy top-level keys (kept for backward compat with rows created before the subcategory refactor)
+  crypto:      ["BTC-USD","ETH-USD","BNB-USD","SOL-USD","XRP-USD","ADA-USD","DOGE-USD","AVAX-USD"],
+  us_equities: ["SPY","QQQ","AAPL","MSFT","NVDA","JPM","GS","V","MA"],
+  oil_energy:  ["USO","UNG","BNO","XLE","XOM","CVX","LNG"],
+  rates_macro: ["TLT","IEF","GLD","SLV","TIP","AGG"],
+  commodities: ["GLD","SLV","USO","UNG","WEAT","CORN","SOYB"],
+  fx:          [],
 }
 
 const SOURCES = ["polymarket", "news", "analytics"]

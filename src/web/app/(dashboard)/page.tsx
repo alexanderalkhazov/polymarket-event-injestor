@@ -10,11 +10,11 @@ import { Skeleton } from "@/components/ui/Skeleton"
 type Filter = "all" | "pending" | "executed" | "dismissed" | "dropped"
 
 const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "pending", label: "Pending" },
-  { key: "executed", label: "Executed" },
+  { key: "all",       label: "All" },
+  { key: "pending",   label: "Pending" },
+  { key: "executed",  label: "Executed" },
   { key: "dismissed", label: "Dismissed" },
-  { key: "dropped", label: "Dropped" },
+  { key: "dropped",   label: "Dropped" },
 ]
 
 export default function StrategyInboxPage() {
@@ -33,10 +33,18 @@ export default function StrategyInboxPage() {
     return merged.filter((s) => s.status === filter)
   }, [merged, filter])
 
+  const close = () => setSelected(null)
+
   const handleDismiss = () => {
     if (!selected) return
     setLocalStatuses((p) => ({ ...p, [selected.id]: "dismissed" }))
     setSelected(null)
+  }
+
+  const handleRestore = () => {
+    if (!selected) return
+    setLocalStatuses((p) => ({ ...p, [selected.id]: "pending" }))
+    setSelected((prev) => prev ? { ...prev, status: "pending" } : null)
   }
 
   const handleExecuted = () => {
@@ -45,12 +53,18 @@ export default function StrategyInboxPage() {
     setSelected((prev) => prev ? { ...prev, status: "executed" } : null)
   }
 
+  const pendingCount = merged.filter((s) => s.status === "pending").length
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <Topbar title="Strategy Inbox" />
+      <Topbar
+        title="Strategy Inbox"
+        subtitle={pendingCount > 0 ? `${pendingCount} pending` : undefined}
+      />
 
+      {/* filter bar */}
       <div style={{
-        display: "flex", gap: 6, padding: "12px 20px",
+        display: "flex", gap: 6, padding: "10px 20px",
         borderBottom: "1px solid var(--border)", flexShrink: 0,
         background: "var(--bg1)",
       }}>
@@ -92,10 +106,11 @@ export default function StrategyInboxPage() {
       </div>
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {/* card list */}
         <div style={{
           width: selected ? "380px" : "100%", flexShrink: 0,
-          overflowY: "auto", padding: "20px",
-          display: "flex", flexDirection: "column", gap: 14,
+          overflowY: "auto", padding: "16px",
+          display: "flex", flexDirection: "column", gap: 12,
           borderRight: selected ? "1px solid var(--border)" : "none",
           transition: "width 0.15s",
         }}>
@@ -134,12 +149,15 @@ export default function StrategyInboxPage() {
           )}
         </div>
 
+        {/* detail panel */}
         {selected && (
           <div style={{ flex: 1, overflow: "hidden" }}>
             <StrategyDetail
               strategy={merged.find((s) => s.id === selected.id) ?? selected}
+              onClose={close}
               onDismiss={handleDismiss}
               onExecuted={handleExecuted}
+              onRestore={handleRestore}
             />
           </div>
         )}

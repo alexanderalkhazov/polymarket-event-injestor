@@ -121,6 +121,36 @@ def _score(feat_dict: dict) -> tuple[float, list[dict]]:
     return rule_based_score(feat_dict), []
 
 
+_POLY_KEYWORD_TICKERS: list[tuple[list[str], str]] = [
+    (["bitcoin", " btc "], "BTC-USD"),
+    (["ethereum", " eth "], "ETH-USD"),
+    (["solana", " sol "], "SOL-USD"),
+    (["xrp", "ripple"], "XRP-USD"),
+    (["dogecoin", "doge"], "DOGE-USD"),
+    (["nvidia", "nvda"], "NVDA"),
+    (["apple", " aapl"], "AAPL"),
+    (["tesla", " tsla"], "TSLA"),
+    (["microsoft", " msft"], "MSFT"),
+    (["meta ", "facebook"], "META"),
+    (["amazon", " amzn"], "AMZN"),
+    (["google", "alphabet", "googl"], "GOOGL"),
+    (["oil", "opec", "crude", "brent", "wti"], "USO"),
+    (["gold", "bullion"], "GLD"),
+    (["fed ", "federal reserve", "fomc", "rate hike", "rate cut", "powell"], "TLT"),
+    (["trump", "republican", "maga", "gop"], "SPY"),
+    (["recession", "gdp", "s&p", "stock market", "dow jones", "nasdaq"], "SPY"),
+    (["inflation", "cpi", "pce"], "TIP"),
+]
+
+
+def _extract_poly_ticker(question: str) -> Optional[str]:
+    q = question.lower()
+    for keywords, ticker in _POLY_KEYWORD_TICKERS:
+        if any(kw in q for kw in keywords):
+            return ticker
+    return None
+
+
 def _embed(text: str) -> list[float]:
     return _get_oai().embeddings.create(
         input=text, model="text-embedding-3-small"
@@ -370,8 +400,37 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     except Exception:
         opp_vec = None
 
-    direction = hypothesis.get("direction", "up")
-    action = "buy" if direction == "up" else "sell"
+    # Direction from signal (not hypothesis placeholder which always says "up")
+    sig_direction = signal.get("direction") or hypothesis.get("direction", "up")
+    action = "buy" if sig_direction == "up" else "sell"
+
+    # For polymarket: extract a tradeable ticker and use the market question for display
+    if signal["source"] == "polymarket":
+        raw_payload = signal.get("payload") or {}
+        payload: dict = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
+        question = str(payload.get("question") or symbol)
+        related = _extract_poly_ticker(question)
+        tickers = [related] if related else [question[:60] + ("…" if len(question) > 60 else "")]
+        # Enrich placeholder narrative with market context
+        if not narrative.get("thesis") or "Narrative unavailable" in (narrative.get("risk_note") or ""):
+            narrative["summary"] = question[:120]
+            narrative["thesis"] = (
+                f"Prediction market conviction shift on: \"{question}\" "
+                f"(YES price {'rose' if sig_direction == 'up' else 'fell'}, "
+                f"confidence {int(confidence * 100)}%). "
+                f"Liquidity: ${payload.get('liquidity', 0):,.0f}."
+            )
+    else:
+        tickers = [symbol]
+
+    # Deduplicate: skip if we already created an opportunity for this symbol in the last 4h
+    recent = await db.fetchrow(
+        "SELECT id FROM opportunities WHERE tickers @> $1 AND created_at > NOW()-INTERVAL '4 hours' LIMIT 1",
+        tickers,
+    )
+    if recent:
+        logger.debug("Dedup: opportunity for %s already exists in last 4h — skipping", tickers)
+        return
 
     saved = await db.fetchrow(
         """INSERT INTO opportunities
@@ -389,7 +448,7 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         narrative.get("risk_note"),
         narrative.get("historical_note"),
         action,
-        [symbol],
+        tickers,
         bt.get("avg_return_pct"),
         hypothesis.get("hold_days", 5),
         0.03,

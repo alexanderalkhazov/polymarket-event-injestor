@@ -9,13 +9,27 @@ logger = logging.getLogger(__name__)
 RISK_PCT = {"conservative": 0.01, "moderate": 0.03, "aggressive": 0.06}
 
 
+def _is_polymarket_id(ticker: str) -> bool:
+    return ticker.startswith("0x") and len(ticker) > 20
+
+
 async def fan_out_to_users(opp: dict, db, redis) -> None:
-    users = await db.fetch(
-        """SELECT DISTINCT u.* FROM users u
-           JOIN subscriptions s ON s.user_id = u.id
-           WHERE s.symbol = ANY($1::text[])""",
-        opp["tickers"],
-    )
+    tickers = opp["tickers"] or []
+    is_polymarket = all(_is_polymarket_id(t) for t in tickers) if tickers else False
+
+    if is_polymarket:
+        # Polymarket symbols are hex contract IDs — no user subscribes to them directly.
+        # Broadcast to all users who have any active subscription.
+        users = await db.fetch(
+            "SELECT DISTINCT u.* FROM users u JOIN subscriptions s ON s.user_id = u.id"
+        )
+    else:
+        users = await db.fetch(
+            """SELECT DISTINCT u.* FROM users u
+               JOIN subscriptions s ON s.user_id = u.id
+               WHERE s.symbol = ANY($1::text[])""",
+            tickers,
+        )
     for user in users:
         risk_level = user["risk_level"] or "moderate"
         pct    = min(RISK_PCT.get(risk_level, 0.03), float(user.get("max_position_pct") or 0.05))

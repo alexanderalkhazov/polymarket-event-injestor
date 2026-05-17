@@ -26,15 +26,12 @@ CREATE TABLE subscriptions (
   UNIQUE (user_id, source, symbol)
 );
 
--- Users subscribe to market categories. The resolver expands these to the
--- subscriptions table automatically. Users never manage subscriptions directly.
+-- Users subscribe to market subcategories (e.g. equities_tech, crypto_defi).
+-- The resolver expands these to the subscriptions table automatically.
 CREATE TABLE market_category_subscriptions (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  category   TEXT NOT NULL CHECK (category IN (
-               'oil_energy', 'us_equities', 'crypto',
-               'rates_macro', 'commodities', 'fx'
-             )),
+  category   TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (user_id, category)
 );
