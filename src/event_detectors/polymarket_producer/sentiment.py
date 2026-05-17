@@ -1,6 +1,8 @@
 """Polymarket macro sentiment — aggregate YES probabilities into named categories.
 
-Written to Redis as `polymarket:macro_sentiment` (TTL 2h) after every producer poll.
+Written to Redis as `polymarket:macro_sentiment` (TTL 24h) after every producer poll.
+24h TTL means stale-but-valid sentiment survives short outages; `updated_at` lets the
+prompt flag data that is more than a few hours old.
 Read by the AI correlator to enrich the Claude prompt with crowd-sourced macro views.
 """
 from __future__ import annotations
@@ -8,12 +10,13 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 REDIS_KEY = "polymarket:macro_sentiment"
-REDIS_TTL = 7_200  # 2 hours
+REDIS_TTL = 86_400  # 24 hours — survives short API outages; updated_at signals staleness
 
 
 @dataclass
@@ -169,6 +172,7 @@ def compute_sentiment(snapshots: dict) -> dict:
             "direction_note": cat.direction_note,
         }
 
+    result["_meta"] = {"updated_at": datetime.now(timezone.utc).isoformat()}
     return result
 
 

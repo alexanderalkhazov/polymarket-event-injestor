@@ -275,13 +275,31 @@ async def _run_backtest(hypothesis: dict, symbol: str, tsdb: asyncpg.Pool, db: a
 
 
 async def _get_polymarket_sentiment(tickers: list[str], redis) -> dict:
-    """Fetch and filter Polymarket macro sentiment from Redis for the given tickers."""
+    """Fetch and filter Polymarket macro sentiment from Redis for the given tickers.
+
+    Returns filtered categories dict plus a top-level `_meta` key with `updated_at`
+    and `age_hours` so the prompt can warn when data is stale.
+    """
     try:
         raw = await redis.get(POLY_SENTIMENT_KEY)
         if not raw:
             return {}
         full = json.loads(raw)
-        return filter_for_tickers(full, tickers)
+        meta = full.pop("_meta", {})
+        filtered = filter_for_tickers(full, tickers)
+        if not filtered:
+            return {}
+        # Compute age
+        age_hours: float | None = None
+        if meta.get("updated_at"):
+            from datetime import datetime, timezone
+            try:
+                updated = datetime.fromisoformat(meta["updated_at"])
+                age_hours = (datetime.now(timezone.utc) - updated).total_seconds() / 3600
+            except Exception:
+                pass
+        filtered["_meta"] = {"updated_at": meta.get("updated_at"), "age_hours": age_hours}
+        return filtered
     except Exception as exc:
         logger.warning("Failed to read Polymarket sentiment: %s", exc)
         return {}

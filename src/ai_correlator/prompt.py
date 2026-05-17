@@ -42,8 +42,19 @@ def build_prompt(
 
     # Format Polymarket sentiment block
     if polymarket_sentiment:
-        poly_lines = []
+        meta = polymarket_sentiment.get("_meta", {})
+        age_hours = meta.get("age_hours")
+        if age_hours is not None and age_hours > 6:
+            age_note = f"  ⚠ DATA IS {age_hours:.0f}h OLD — treat with reduced confidence\n"
+        elif age_hours is not None:
+            age_note = f"  (data age: {age_hours:.1f}h)\n"
+        else:
+            age_note = ""
+
+        poly_lines = [age_note] if age_note else []
         for cat_name, data in polymarket_sentiment.items():
+            if cat_name == "_meta":
+                continue
             prob_str = _fmt_prob(data["avg_prob"])
             n = data["market_count"]
             top_q = data["top_question"][:90] + ("…" if len(data["top_question"]) > 90 else "")
@@ -54,9 +65,9 @@ def build_prompt(
                 f"    e.g. \"{top_q}\"\n"
                 f"    Note: {note}"
             )
-        poly_str = "\n".join(poly_lines)
+        poly_str = "\n".join(poly_lines) if poly_lines else "  no relevant categories for this ticker"
     else:
-        poly_str = "  unavailable (producer not yet populated cache)"
+        poly_str = "  unavailable (producer down or cache expired)"
 
     return f"""You are a trading strategy analyst. A quantitative model has identified a
 prediction. Your ONLY job is to explain it clearly in four fields.
