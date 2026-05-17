@@ -29,6 +29,7 @@ class AppConfig:
     kafka_topic: str
     poll_interval_seconds: int
     polymarket: PolymarketConfig
+    redis_url: str = "redis://redis:6379"
 
 
 def load_config() -> AppConfig:
@@ -36,6 +37,7 @@ def load_config() -> AppConfig:
         kafka_bootstrap_servers=_env("KAFKA_BOOTSTRAP_SERVERS", required=True),
         kafka_topic=_env("KAFKA_TOPIC", "raw.polymarket"),
         poll_interval_seconds=int(_env("POLL_INTERVAL_SECONDS", "30")),
+        redis_url=_env("REDIS_URL", "redis://redis:6379"),
         polymarket=PolymarketConfig(
             base_url=_env("POLYMARKET_BASE_URL", "https://gamma-api.polymarket.com"),
             request_timeout_seconds=int(_env("POLYMARKET_REQUEST_TIMEOUT_SECONDS", "30")),

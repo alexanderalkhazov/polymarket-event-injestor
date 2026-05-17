@@ -15,6 +15,14 @@ import asyncpg
 import redis.asyncio as aioredis
 from confluent_kafka import Consumer, KafkaError
 
+from event_detectors.polymarket_producer.sentiment import CATEGORIES as SENTIMENT_CATEGORIES
+
+# Build a quick keyword→tickers lookup from shared sentiment definitions
+_KEYWORD_TICKERS: list[tuple[str, list[str]]] = []
+for _cat in SENTIMENT_CATEGORIES:
+    for _kw in _cat.keywords:
+        _KEYWORD_TICKERS.append((_kw, _cat.related_tickers))
+
 logger = logging.getLogger(__name__)
 
 # Quality gates — keep only meaningful conviction moves
@@ -124,16 +132,6 @@ class PolymarketConsumer:
             except ValueError:
                 pass
 
-        # Write every event to TimescaleDB (raw store)
-        try:
-            await self._tsdb.execute(
-                """INSERT INTO raw_polymarket (ts, market_id, symbol, yes_price, volume_24h)
-                   VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING""",
-                ts, market_id, market_id, yes_price, raw.get("volume"),
-            )
-        except Exception as exc:
-            logger.warning("raw_polymarket write failed: %s", exc)
-
         # Conviction detection
         state = self._states.setdefault(market_id, MarketState())
         prev = state.last_yes_price
@@ -144,6 +142,17 @@ class PolymarketConsumer:
 
         change_abs = abs(yes_price - prev)
         change_pct = change_abs / prev if prev > 0 else 0.0
+
+        # Only persist price ticks that actually moved — avoids writing every poll snapshot
+        if change_abs >= 0.001:
+            try:
+                await self._tsdb.execute(
+                    """INSERT INTO raw_polymarket (ts, market_id, symbol, yes_price, volume_24h)
+                       VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING""",
+                    ts, market_id, market_id, yes_price, raw.get("volume"),
+                )
+            except Exception as exc:
+                logger.warning("raw_polymarket write failed: %s", exc)
 
         signal_score, urgency, ci = _score_conviction(
             change_abs, change_pct, raw.get("volume")
@@ -162,11 +171,34 @@ class PolymarketConsumer:
             return
         self._last_signal_ts[market_id] = now_ts
 
-        direction = "up" if yes_price > prev else "down"
+        question = raw.get("question", "")
+        question_lower = question.lower()
+
+        # Only fire a tradeable signal when the question maps to real instruments.
+        # Unmapped markets (sports, celebrity, politics without clear ticker) are
+        # handled exclusively via the macro sentiment cache — not as trade signals.
+        matched_tickers: list[str] = []
+        for kw, tickers in _KEYWORD_TICKERS:
+            if kw in question_lower:
+                for t in tickers:
+                    if t not in matched_tickers:
+                        matched_tickers.append(t)
+                break  # first match wins
+
+        if not matched_tickers:
+            logger.debug("No ticker mapping for market %s — skipping signal", market_id[:16])
+            return
+
+        # Correct direction: rising YES on "recession" = bearish equities (sell),
+        # but rising YES on "bitcoin hits $100k" = bullish (buy).
+        # We can't perfectly infer this here, so we store the raw yes_price direction
+        # and let the correlator + Claude interpret it with the question context.
+        yes_direction = "up" if yes_price > prev else "down"
+
         signal_id = str(uuid.uuid4())
         payload = {
             "market_id": market_id,
-            "question": raw.get("question", ""),
+            "question": question,
             "yes_price": yes_price,
             "prev_yes_price": prev,
             "change_abs": round(change_abs, 4),
@@ -176,23 +208,28 @@ class PolymarketConsumer:
             "signal_score": signal_score,
             "urgency": urgency,
             "confidence_interval": ci,
+            "matched_tickers": matched_tickers,
         }
+
+        # Use the primary matched ticker as the signal symbol so the backtester can
+        # look up real historical data for it (instead of the hex market ID).
+        primary_ticker = matched_tickers[0]
 
         await self._pool.execute(
             """INSERT INTO signals (id, source, symbol, type, score, direction, payload, created_at)
                VALUES ($1, 'polymarket', $2, 'conviction_shift', $3, $4, $5, $6)""",
             uuid.UUID(signal_id),
-            market_id,
+            primary_ticker,
             signal_score,
-            direction,
+            yes_direction,
             json.dumps(payload),
             ts,
         )
         await self._redis.publish(
             "new_signal",
-            json.dumps({"signal_id": signal_id, "source": "polymarket", "symbol": market_id}),
+            json.dumps({"signal_id": signal_id, "source": "polymarket", "symbol": primary_ticker}),
         )
         logger.info(
-            "Conviction shift: %s %.4f→%.4f score=%.3f urgency=%s",
-            market_id[:16], prev, yes_price, signal_score, urgency,
+            "Conviction shift: %s %.4f→%.4f score=%.3f tickers=%s",
+            market_id[:16], prev, yes_price, signal_score, matched_tickers,
         )

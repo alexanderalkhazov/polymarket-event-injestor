@@ -32,6 +32,10 @@ from openai import OpenAI
 
 from .prompt import build_prompt
 from .fan_out import fan_out_to_users
+from event_detectors.polymarket_producer.sentiment import (
+    REDIS_KEY as POLY_SENTIMENT_KEY,
+    filter_for_tickers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +274,19 @@ async def _run_backtest(hypothesis: dict, symbol: str, tsdb: asyncpg.Pool, db: a
     }
 
 
+async def _get_polymarket_sentiment(tickers: list[str], redis) -> dict:
+    """Fetch and filter Polymarket macro sentiment from Redis for the given tickers."""
+    try:
+        raw = await redis.get(POLY_SENTIMENT_KEY)
+        if not raw:
+            return {}
+        full = json.loads(raw)
+        return filter_for_tickers(full, tickers)
+    except Exception as exc:
+        logger.warning("Failed to read Polymarket sentiment: %s", exc)
+        return {}
+
+
 async def run() -> None:
     database_url  = os.environ["DATABASE_URL"]
     timescale_url = os.environ["TIMESCALE_URL"]
@@ -375,8 +392,12 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         )
     ]
 
+    # 9b. Polymarket sentiment — read from Redis, filter to categories relevant to this symbol
+    # (symbol is the real ticker for all signal sources now — polymarket consumer resolved it)
+    poly_sentiment = await _get_polymarket_sentiment([symbol], redis)
+
     # 10. Claude narrative
-    prompt = build_prompt(signal, confidence, top_features, bt, similar_opps, macro, hypothesis)
+    prompt = build_prompt(signal, confidence, top_features, bt, similar_opps, macro, hypothesis, poly_sentiment)
     try:
         response = _get_claude().messages.create(
             model="claude-sonnet-4-20250514",
@@ -404,20 +425,20 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     sig_direction = signal.get("direction") or hypothesis.get("direction", "up")
     action = "buy" if sig_direction == "up" else "sell"
 
-    # For polymarket: extract a tradeable ticker and use the market question for display
+    # For polymarket: the consumer already resolved matched_tickers using the sentiment
+    # category map. Use those directly — symbol is now the primary real ticker too.
     if signal["source"] == "polymarket":
         raw_payload = signal.get("payload") or {}
         payload: dict = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
         question = str(payload.get("question") or symbol)
-        related = _extract_poly_ticker(question)
-        tickers = [related] if related else [question[:60] + ("…" if len(question) > 60 else "")]
-        # Enrich placeholder narrative with market context
+        tickers = payload.get("matched_tickers") or [symbol]
+        # Fallback narrative if Claude unavailable
         if not narrative.get("thesis") or "Narrative unavailable" in (narrative.get("risk_note") or ""):
             narrative["summary"] = question[:120]
             narrative["thesis"] = (
                 f"Prediction market conviction shift on: \"{question}\" "
                 f"(YES price {'rose' if sig_direction == 'up' else 'fell'}, "
-                f"confidence {int(confidence * 100)}%). "
+                f"score {confidence:.0%}). "
                 f"Liquidity: ${payload.get('liquidity', 0):,.0f}."
             )
     else:
