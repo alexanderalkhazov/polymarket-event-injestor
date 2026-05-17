@@ -1,154 +1,177 @@
-"""Nightly OHLCV + macro ingestor for TimescaleDB."""
+"""Nightly OHLCV + macro ingestor — writes to raw_ohlcv, raw_macro, technicals."""
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
+import time
 
 import asyncpg
 import pandas as pd
-import ta as talib
 import schedule
-import time
 import yfinance as yf
 from fredapi import Fred
 
 logger = logging.getLogger(__name__)
 
-FRED_SERIES = [
-    "FEDFUNDS",    # fed funds rate
-    "CPIAUCSL",    # CPI
-    "DCOILWTICO",  # WTI crude
-    "DGS10",       # US 10Y yield
-    "VIXCLS",      # VIX
-    "DTWEXBGS",    # USD index
+# FRED series IDs used by the feature store
+FRED_SERIES = {
+    "VIXCLS":    "VIX volatility index",
+    "DCOILWTICO": "WTI crude oil",
+    "DGS10":     "US 10-year Treasury yield",
+    "FEDFUNDS":  "Federal funds rate",
+    "DTWEXBGS":  "USD broad index",
+}
+
+ALL_SYMBOLS = [
+    "USO", "XOM", "XLE", "LNG",          # oil_energy
+    "SPY", "QQQ", "AAPL", "MSFT", "NVDA", # us_equities
+    "GLD", "SLV", "UNG", "WEAT",          # commodities/rates_macro
+    "TLT",
 ]
 
-DEFAULT_SYMBOLS = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "META", "GOOGL",
-    "AMD", "INTC", "NFLX", "COIN", "PLTR", "SOFI", "SPY", "QQQ",
-]
+DEV_SYMBOLS = ["USO", "SPY", "QQQ"]
 
 
-def _get_symbols() -> list[str]:
-    tickers_env = os.getenv("TICKERS", "")
-    if tickers_env:
-        return [t.strip() for t in tickers_env.split(",") if t.strip()]
-    return DEFAULT_SYMBOLS
+def _symbols() -> list[str]:
+    if os.getenv("DEV_MODE", "false").lower() == "true":
+        return DEV_SYMBOLS
+    return ALL_SYMBOLS
 
 
-async def ingest_ohlcv(symbols: list[str], conn: asyncpg.Connection) -> None:
-    if not symbols:
-        logger.info("No symbols to ingest")
-        return
+def _lookback(backfill: bool) -> str:
+    if backfill:
+        return "6mo" if os.getenv("DEV_MODE", "false").lower() == "true" else "2y"
+    return "5d"
 
-    df = yf.download(symbols, period="2y", interval="1d", auto_adjust=True, group_by="ticker")
+
+async def ingest_ohlcv(symbols: list[str], tsdb: asyncpg.Connection, backfill: bool) -> None:
+    period = _lookback(backfill)
+    logger.info("Downloading OHLCV: %d symbols, period=%s", len(symbols), period)
+
     for symbol in symbols:
         try:
-            if len(symbols) == 1:
-                s = df.copy()
-            else:
-                s = df.xs(symbol, axis=1, level=0).copy()
-            s = s.dropna()
-        except (KeyError, TypeError):
-            logger.warning("No data for %s", symbol)
-            continue
-
-        s["rsi_14"] = talib.momentum.RSIIndicator(s["Close"], window=14).rsi()
-        s["sma_20"] = talib.trend.SMAIndicator(s["Close"], window=20).sma_indicator()
-        s["sma_50"] = talib.trend.SMAIndicator(s["Close"], window=50).sma_indicator()
-        macd_ind = talib.trend.MACD(s["Close"])
-        s["macd"] = macd_ind.macd()
-        s["macd_signal"] = macd_ind.macd_signal()
-        s["atr_14"] = talib.volatility.AverageTrueRange(s["High"], s["Low"], s["Close"], window=14).average_true_range()
-        bb_ind = talib.volatility.BollingerBands(s["Close"], window=20)
-        s["bb_upper"] = bb_ind.bollinger_hband()
-        s["bb_lower"] = bb_ind.bollinger_lband()
-
-        ohlcv_rows = []
-        tech_rows = []
-        for row in s.itertuples():
-            ts = row.Index.to_pydatetime()
-            try:
-                ohlcv_rows.append((
-                    ts, symbol,
-                    float(row.Open), float(row.High), float(row.Low), float(row.Close),
-                    int(row.Volume), "1d"
-                ))
-            except (AttributeError, TypeError, ValueError):
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, interval="1d", auto_adjust=True)
+            if df.empty:
+                logger.warning("No daily data for %s", symbol)
                 continue
 
-            def _f(v: object) -> float | None:
+            ohlcv_rows = []
+            for idx, row in df.iterrows():
+                ts = pd.Timestamp(idx).to_pydatetime()
                 try:
-                    return float(v) if pd.notna(v) else None  # type: ignore[arg-type]
+                    ohlcv_rows.append((
+                        ts, symbol, "1d",
+                        float(row["Open"]), float(row["High"]),
+                        float(row["Low"]), float(row["Close"]),
+                        int(row["Volume"]),
+                    ))
                 except (TypeError, ValueError):
-                    return None
+                    continue
 
-            tech_rows.append((
-                ts, symbol, "1d",
-                _f(getattr(row, "rsi_14", None)),
-                _f(getattr(row, "sma_20", None)),
-                _f(getattr(row, "sma_50", None)),
-                None, None,  # ema_12, ema_26
-                _f(getattr(row, "macd", None)),
-                _f(getattr(row, "macd_signal", None)),
-                _f(getattr(row, "atr_14", None)),
-                _f(getattr(row, "bb_upper", None)),
-                _f(getattr(row, "bb_lower", None)),
-                None,  # adx_14
-            ))
+            if ohlcv_rows:
+                await tsdb.executemany(
+                    """INSERT INTO raw_ohlcv (ts, symbol, interval, open, high, low, close, volume)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                       ON CONFLICT (ts, symbol, interval) DO NOTHING""",
+                    ohlcv_rows,
+                )
+                logger.info("raw_ohlcv: %d bars for %s", len(ohlcv_rows), symbol)
 
-        await conn.executemany(
-            """INSERT INTO ohlcv (time,symbol,open,high,low,close,volume,interval)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-               ON CONFLICT (time,symbol,interval) DO UPDATE
-               SET open=$3,high=$4,low=$5,close=$6,volume=$7""",
-            ohlcv_rows,
-        )
-        await conn.executemany(
-            """INSERT INTO technicals
-               (time,symbol,interval,rsi_14,sma_20,sma_50,ema_12,ema_26,macd,macd_signal,atr_14,bb_upper,bb_lower,adx_14)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-               ON CONFLICT (time,symbol,interval) DO UPDATE
-               SET rsi_14=$4,sma_20=$5,sma_50=$6,macd=$9,macd_signal=$10,atr_14=$11,bb_upper=$12,bb_lower=$13""",
-            tech_rows,
-        )
-        logger.info("Ingested %d bars for %s", len(ohlcv_rows), symbol)
+            # Compute and store technicals (inline — no pandas-ta dependency)
+            delta = df["Close"].diff()
+            gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+            loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+            df["rsi_14"] = 100 - 100 / (1 + gain / loss)
+
+            df["sma_20"] = df["Close"].rolling(20).mean()
+            df["sma_50"] = df["Close"].rolling(50).mean()
+            df["ema_12"] = df["Close"].ewm(span=12, adjust=False).mean()
+            df["ema_26"] = df["Close"].ewm(span=26, adjust=False).mean()
+            macd_line = df["ema_12"] - df["ema_26"]
+            df["macd"] = macd_line
+            df["macd_signal"] = macd_line.ewm(span=9, adjust=False).mean()
+
+            high_low   = df["High"] - df["Low"]
+            high_close = (df["High"] - df["Close"].shift()).abs()
+            low_close  = (df["Low"]  - df["Close"].shift()).abs()
+            tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+            df["atr_14"] = tr.ewm(alpha=1 / 14, adjust=False).mean()
+
+            bb_mid = df["Close"].rolling(20).mean()
+            bb_std = df["Close"].rolling(20).std()
+            df["bb_upper"] = bb_mid + 2 * bb_std
+            df["bb_lower"] = bb_mid - 2 * bb_std
+
+            tech_rows = []
+            for idx, row in df.iterrows():
+                ts = pd.Timestamp(idx).to_pydatetime()
+                def _f(v: object) -> float | None:
+                    try:
+                        return float(v) if pd.notna(v) else None  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        return None
+
+                tech_rows.append((
+                    ts, symbol, "1d",
+                    _f(row.get("rsi_14")), _f(row.get("sma_20")), _f(row.get("sma_50")),
+                    _f(row.get("ema_12")), _f(row.get("ema_26")),
+                    _f(row.get("macd")), _f(row.get("macd_signal")),
+                    _f(row.get("atr_14")), _f(row.get("bb_upper")), _f(row.get("bb_lower")),
+                    None,  # adx_14 — skipped for now
+                ))
+
+            if tech_rows:
+                await tsdb.executemany(
+                    """INSERT INTO technicals
+                       (ts, symbol, interval, rsi_14, sma_20, sma_50, ema_12, ema_26,
+                        macd, macd_signal, atr_14, bb_upper, bb_lower, adx_14)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                       ON CONFLICT (ts, symbol, interval) DO NOTHING""",
+                    tech_rows,
+                )
+                logger.info("technicals: %d rows for %s", len(tech_rows), symbol)
+
+            time.sleep(0.5)  # avoid yfinance rate limiting
+
+        except Exception as exc:
+            logger.error("OHLCV ingest failed for %s: %s", symbol, exc)
 
 
-async def ingest_macro(conn: asyncpg.Connection) -> None:
+async def ingest_macro(tsdb: asyncpg.Connection) -> None:
     fred_key = os.getenv("FRED_API_KEY", "")
     if not fred_key:
         logger.warning("FRED_API_KEY not set — skipping macro ingest")
         return
     fred = Fred(api_key=fred_key)
-    for series_id in FRED_SERIES:
+    for series_id, desc in FRED_SERIES.items():
         try:
-            data = fred.get_series(series_id, observation_start="2020-01-01")
+            data = fred.get_series(series_id, observation_start="2022-01-01")
             rows = [
                 (ts.to_pydatetime(), series_id, float(val))
                 for ts, val in data.items() if pd.notna(val)
             ]
-            await conn.executemany(
-                """INSERT INTO macro_indicators (time,series_id,value)
-                   VALUES ($1,$2,$3)
-                   ON CONFLICT (time,series_id) DO UPDATE SET value=$3""",
+            await tsdb.executemany(
+                """INSERT INTO raw_macro (ts, series_id, value)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (ts, series_id) DO NOTHING""",
                 rows,
             )
-            logger.info("Ingested %d macro points for %s", len(rows), series_id)
+            logger.info("raw_macro: %d points for %s (%s)", len(rows), series_id, desc)
         except Exception as exc:
-            logger.error("Failed to ingest %s: %s", series_id, exc)
+            logger.error("Macro ingest failed for %s: %s", series_id, exc)
 
 
-async def _run_once() -> None:
+async def run_once(backfill: bool = False) -> None:
     timescale_url = os.environ["TIMESCALE_URL"]
-
-    symbols = _get_symbols()
-    logger.info("Ingesting %d symbols", len(symbols))
+    symbols = _symbols()
+    logger.info("Starting ingest: %d symbols, backfill=%s", len(symbols), backfill)
 
     conn = await asyncpg.connect(timescale_url)
     try:
-        await ingest_ohlcv(symbols, conn)
+        await ingest_ohlcv(symbols, conn, backfill)
         await ingest_macro(conn)
     finally:
         await conn.close()
@@ -156,13 +179,22 @@ async def _run_once() -> None:
 
 
 def _run_job() -> None:
-    asyncio.run(_run_once())
+    asyncio.run(run_once(backfill=False))
 
 
 def run_scheduler() -> None:
-    # Run immediately on startup, then nightly at 00:30 UTC
     _run_job()
-    schedule.every().day.at("00:30").do(_run_job)
+    schedule.every().day.at("01:00").do(_run_job)
     while True:
         schedule.run_pending()
         time.sleep(60)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--backfill", action="store_true",
+                        help="Pull full history instead of yesterday only")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO), format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    asyncio.run(run_once(backfill=args.backfill))

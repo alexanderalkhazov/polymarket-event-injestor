@@ -2,9 +2,8 @@
 import logging
 import time
 
-from observability.pro_logging import setup_logging
 
-setup_logging(service_name="backtester")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger(__name__)
 logger.info("Backtester service started (called on-demand by ai-correlator)")
 

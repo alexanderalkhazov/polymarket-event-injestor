@@ -10,7 +10,7 @@
       "MaintenanceDB": "eventedge"
     },
     "2": {
-      "Name": "Historical DB (OHLCV, macro)",
+      "Name": "Historical DB (features, OHLCV)",
       "Group": "eventedge",
       "Host": "timescale",
       "Port": 5432,

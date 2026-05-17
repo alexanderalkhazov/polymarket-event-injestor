@@ -21,15 +21,12 @@ MIN_SIGNAL_SCORE = 0.10
 def _score_conviction(
     change_abs: float, change_pct: float, volume: Optional[float]
 ) -> Tuple[float, str, list]:
-    # Weight absolute change more than relative (absolute moves in a prediction market are meaningful)
     score = min(1.0, change_abs * 5.0 + change_pct * 1.5)
-    # Volume boost: high-liquidity shifts are more informative
     if volume and volume > 200_000:
         score = min(1.0, score * 1.15)
     elif volume and volume > 50_000:
         score = min(1.0, score * 1.05)
     score = round(score, 4)
-
     urgency = "high" if score >= 0.60 else "medium" if score >= 0.35 else "low"
     ci = [round(max(0.0, score - 0.12), 3), round(min(1.0, score + 0.12), 3)]
     return score, urgency, ci
@@ -47,15 +44,18 @@ class PolymarketConsumer:
         topic: str,
         group_id: str,
         database_url: str,
+        timescale_url: str,
         redis_url: str,
     ) -> None:
         self._bootstrap_servers = bootstrap_servers
         self._topic = topic
         self._group_id = group_id
         self._database_url = database_url
+        self._timescale_url = timescale_url
         self._redis_url = redis_url
         self._states: Dict[str, MarketState] = {}
         self._pool: Optional[asyncpg.Pool] = None
+        self._tsdb: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
 
     @classmethod
@@ -65,11 +65,13 @@ class PolymarketConsumer:
             topic=os.getenv("KAFKA_TOPIC", "raw.polymarket"),
             group_id=os.getenv("KAFKA_GROUP_ID", "polymarket-consumer"),
             database_url=os.environ["DATABASE_URL"],
+            timescale_url=os.environ["TIMESCALE_URL"],
             redis_url=os.getenv("REDIS_URL", "redis://redis:6379"),
         )
 
     async def run(self) -> None:
         self._pool = await asyncpg.create_pool(self._database_url, min_size=1, max_size=5)
+        self._tsdb = await asyncpg.create_pool(self._timescale_url, min_size=1, max_size=3)
         self._redis = aioredis.from_url(self._redis_url)
 
         consumer = Consumer({
@@ -98,6 +100,8 @@ class PolymarketConsumer:
             consumer.close()
             if self._pool:
                 await self._pool.close()
+            if self._tsdb:
+                await self._tsdb.close()
             if self._redis:
                 await self._redis.aclose()
 
@@ -107,6 +111,24 @@ class PolymarketConsumer:
         if yes_price is None:
             return
 
+        ts = datetime.now(timezone.utc)
+        if raw.get("fetched_at"):
+            try:
+                ts = datetime.fromisoformat(raw["fetched_at"])
+            except ValueError:
+                pass
+
+        # Write every event to TimescaleDB (raw store)
+        try:
+            await self._tsdb.execute(
+                """INSERT INTO raw_polymarket (ts, market_id, symbol, yes_price, volume_24h)
+                   VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING""",
+                ts, market_id, market_id, yes_price, raw.get("volume"),
+            )
+        except Exception as exc:
+            logger.warning("raw_polymarket write failed: %s", exc)
+
+        # Conviction detection
         state = self._states.setdefault(market_id, MarketState())
         prev = state.last_yes_price
         state.last_yes_price = yes_price
@@ -147,7 +169,7 @@ class PolymarketConsumer:
             signal_score,
             direction,
             json.dumps(payload),
-            datetime.now(timezone.utc),
+            ts,
         )
         await self._redis.publish(
             "new_signal",

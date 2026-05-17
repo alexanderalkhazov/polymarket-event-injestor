@@ -7,7 +7,6 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url)
   const source = searchParams.get("source")
-  const status = searchParams.get("status")
   const limit = parseInt(searchParams.get("limit") ?? "100")
 
   let query = "SELECT * FROM signals WHERE created_at > NOW()-INTERVAL '24 hours'"
@@ -25,7 +24,6 @@ export async function GET(req: Request) {
   const signals = res.rows.map((r: Record<string, unknown>) => ({
     ...r,
     score: r.score != null ? Number(r.score) : 0,
-    pipeline_step: r.pipeline_step != null ? Number(r.pipeline_step) : 0,
   }))
   return Response.json({ signals })
 }

@@ -14,11 +14,11 @@ export async function GET(req: Request) {
   // Single strategy detail (for StrategyDetail panel)
   if (id) {
     const stratRes = await db.query(
-      `SELECT s.*, o.summary, o.thesis, o.action, o.tickers, o.confidence,
+      `SELECT s.*, o.summary, o.thesis, o.risk_note, o.historical_note,
+              o.action, o.tickers, o.model_confidence,
               o.expected_return_pct, o.hold_days, o.stop_loss_pct,
-              o.historical_context, o.macro_notes,
-              b.win_rate, b.sample_size, b.avg_return_pct, b.max_drawdown_pct,
-              b.max_drawdown_pct, b.sharpe
+              o.top_features, o.macro_snapshot,
+              b.win_rate, b.sample_size, b.avg_return_pct, b.max_drawdown_pct, b.sharpe
        FROM strategies s
        JOIN opportunities o ON o.id = s.opportunity_id
        LEFT JOIN backtest_results b ON b.id = o.backtest_id
@@ -28,26 +28,25 @@ export async function GET(req: Request) {
     const strat = stratRes.rows[0]
     if (!strat) return Response.json({ error: "not found" }, { status: 404 })
 
-    const sigRes = await db.query(
-      `SELECT sig.id, sig.source, sig.type, sig.symbol, sig.score
-       FROM signals sig
-       JOIN opportunities_signals os ON os.signal_id = sig.id
-       JOIN opportunities o ON o.id = os.opportunity_id
-       JOIN strategies s ON s.opportunity_id = o.id
-       WHERE s.id=$1 ORDER BY sig.score DESC LIMIT 10`,
-      [id]
-    )
+    // Fetch signals by IDs stored in opportunities.signal_ids array
+    const sigRes = strat.signal_ids?.length
+      ? await db.query(
+          `SELECT id, source, type, symbol, score FROM signals
+           WHERE id = ANY($1::uuid[]) ORDER BY score DESC LIMIT 10`,
+          [strat.signal_ids]
+        )
+      : { rows: [] }
 
     const macroRes = await tsdb.query(
       `SELECT DISTINCT ON (series_id) series_id, value
-       FROM macro_indicators ORDER BY series_id, time DESC LIMIT 6`
+       FROM raw_macro ORDER BY series_id, ts DESC LIMIT 6`
     )
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const n = (v: any) => (v != null ? Number(v) : null)
     return Response.json({
       ...strat,
-      confidence: n(strat.confidence),
+      model_confidence: n(strat.model_confidence),
       expected_return_pct: n(strat.expected_return_pct),
       stop_loss_pct: n(strat.stop_loss_pct),
       win_rate: n(strat.win_rate),
@@ -61,9 +60,8 @@ export async function GET(req: Request) {
   }
 
   let query = `
-    SELECT s.*, o.summary, o.thesis, o.action, o.tickers, o.confidence,
+    SELECT s.*, o.summary, o.thesis, o.action, o.tickers, o.model_confidence,
            o.expected_return_pct, o.hold_days, o.stop_loss_pct,
-           o.historical_context, o.macro_notes,
            b.win_rate, b.sample_size, b.avg_return_pct, b.max_drawdown_pct
     FROM strategies s
     JOIN opportunities o ON o.id = s.opportunity_id
@@ -83,7 +81,7 @@ export async function GET(req: Request) {
   const n = (v: any) => (v != null ? Number(v) : null)
   const rows = res.rows.map((r) => ({
     ...r,
-    confidence: n(r.confidence),
+    model_confidence: n(r.model_confidence),
     expected_return_pct: n(r.expected_return_pct),
     stop_loss_pct: n(r.stop_loss_pct),
     win_rate: n(r.win_rate),
@@ -101,8 +99,8 @@ export async function PATCH(req: Request) {
   const userId = (session.user as { id?: string }).id
   const body = await req.json()
 
-  // Profile update (from settings/onboarding)
-  if (body.risk_level !== undefined) {
+  // Profile update (risk level, onboarding flag)
+  if (body.risk_level !== undefined || body.onboarding_complete !== undefined) {
     const updates: string[] = []
     const params: unknown[] = []
 
@@ -120,7 +118,7 @@ export async function PATCH(req: Request) {
     return Response.json({ ok: true })
   }
 
-  // Strategy status update
+  // Strategy status update (dismiss / expire)
   const { id, status } = body
   if (!["dismissed", "expired"].includes(status))
     return Response.json({ error: "invalid status" }, { status: 400 })

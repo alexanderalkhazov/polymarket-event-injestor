@@ -4,7 +4,6 @@ import logging
 import os
 import threading
 
-from observability.pro_logging import setup_logging
 from event_processors.polymarket_consumer.consumer import PolymarketConsumer
 from event_processors.news_consumer.consumer import NewsConsumer
 from event_processors.analytics_consumer.consumer import AnalyticsConsumer
@@ -15,7 +14,7 @@ def _run(consumer) -> None:
 
 
 def main() -> None:
-    setup_logging(service_name=os.getenv("SERVICE_NAME", "consumer"))
+    logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO), format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     logger = logging.getLogger(__name__)
     logger.info("Starting combined consumer (polymarket + news + analytics)")
 

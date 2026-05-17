@@ -16,26 +16,26 @@ export async function GET(
 
   const [ohlcvRes, techRes, sigRes, oppRes] = await Promise.all([
     tsdb.query(
-      `SELECT time AS ts, open, high, low, close, volume
-       FROM ohlcv
-       WHERE symbol=$1 AND interval=$2 AND time > NOW() - ($3 || ' days')::interval
-       ORDER BY time ASC`,
+      `SELECT ts, open, high, low, close, volume
+       FROM raw_ohlcv
+       WHERE symbol=$1 AND interval=$2 AND ts > NOW() - ($3 || ' days')::interval
+       ORDER BY ts ASC`,
       [symbol, interval, days]
     ),
     tsdb.query(
-      `SELECT time AS ts, rsi_14 AS rsi, macd, macd_signal
+      `SELECT ts, rsi_14 AS rsi, macd, macd_signal
        FROM technicals
-       WHERE symbol=$1 AND interval=$2 AND time > NOW() - ($3 || ' days')::interval
-       ORDER BY time ASC`,
+       WHERE symbol=$1 AND interval=$2 AND ts > NOW() - ($3 || ' days')::interval
+       ORDER BY ts ASC`,
       [symbol, interval, days]
     ),
     db.query(
-      `SELECT id, source, type, score, created_at
-       FROM signals WHERE $1 = ANY(tickers) ORDER BY created_at DESC LIMIT 20`,
+      `SELECT id, source, type, symbol, score, created_at
+       FROM signals WHERE symbol=$1 ORDER BY created_at DESC LIMIT 20`,
       [symbol]
     ),
     db.query(
-      `SELECT id, action, confidence, expected_return_pct, created_at
+      `SELECT id, action, model_confidence, expected_return_pct, created_at
        FROM opportunities WHERE $1 = ANY(tickers) ORDER BY created_at DESC LIMIT 10`,
       [symbol]
     ),
@@ -56,7 +56,7 @@ export async function GET(
     signals: sigRes.rows.map((r) => ({ ...r, score: n(r.score) })),
     opportunities: oppRes.rows.map((r) => ({
       ...r,
-      confidence: n(r.confidence), expected_return_pct: n(r.expected_return_pct),
+      model_confidence: n(r.model_confidence), expected_return_pct: n(r.expected_return_pct),
     })),
   })
 }

@@ -9,11 +9,11 @@ CREATE TABLE users (
                       CHECK (risk_level IN ('conservative', 'moderate', 'aggressive')),
   max_position_pct  NUMERIC NOT NULL DEFAULT 0.05,
   markets           TEXT[] NOT NULL DEFAULT '{}',
-  alpaca_key_id         TEXT,
-  alpaca_secret         TEXT,
-  is_paper              BOOLEAN NOT NULL DEFAULT TRUE,
-  onboarding_complete   BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  alpaca_key_id     TEXT,
+  alpaca_secret     TEXT,
+  is_paper          BOOLEAN NOT NULL DEFAULT TRUE,
+  onboarding_complete BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE subscriptions (
@@ -21,35 +21,62 @@ CREATE TABLE subscriptions (
   user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   source     TEXT NOT NULL CHECK (source IN ('polymarket', 'news', 'analytics')),
   symbol     TEXT NOT NULL,
+  threshold  NUMERIC,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (user_id, source, symbol)
 );
 
+-- Users subscribe to market categories. The resolver expands these to the
+-- subscriptions table automatically. Users never manage subscriptions directly.
+CREATE TABLE market_category_subscriptions (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category   TEXT NOT NULL CHECK (category IN (
+               'oil_energy', 'us_equities', 'crypto',
+               'rates_macro', 'commodities', 'fx'
+             )),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, category)
+);
+
 CREATE TABLE signals (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  source        TEXT NOT NULL CHECK (source IN ('polymarket', 'news', 'analytics')),
-  symbol        TEXT NOT NULL,
-  tickers       TEXT[] NOT NULL DEFAULT '{}',
-  type          TEXT NOT NULL,
-  score         NUMERIC NOT NULL,
-  direction     TEXT,
-  status        TEXT NOT NULL DEFAULT 'active'
-                  CHECK (status IN ('active', 'processing', 'processed', 'dropped')),
-  pipeline_step INT NOT NULL DEFAULT 0,
-  payload       JSONB NOT NULL DEFAULT '{}',
-  embedding     vector(384),
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  source     TEXT NOT NULL CHECK (source IN ('polymarket', 'news', 'analytics')),
+  symbol     TEXT NOT NULL,
+  type       TEXT NOT NULL,
+  score      NUMERIC NOT NULL,
+  direction  TEXT,
+  payload    JSONB NOT NULL DEFAULT '{}',
+  embedding  vector(1536),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX signals_created_at    ON signals (created_at DESC);
 CREATE INDEX signals_source_symbol ON signals (source, symbol);
 CREATE INDEX signals_embedding_idx ON signals
   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
+-- Named, versioned trading hypotheses
+CREATE TABLE hypotheses (
+  id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name                    TEXT UNIQUE NOT NULL,
+  description             TEXT NOT NULL,
+  feature_conditions      JSONB NOT NULL,
+  invalidation_conditions JSONB,
+  target_symbol           TEXT,
+  direction               TEXT NOT NULL CHECK (direction IN ('up', 'down')),
+  hold_days               INT NOT NULL DEFAULT 5,
+  confidence_threshold    NUMERIC NOT NULL DEFAULT 0.65,
+  is_active               BOOLEAN NOT NULL DEFAULT TRUE,
+  version                 INT NOT NULL DEFAULT 1,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Backtest results for each hypothesis run
 CREATE TABLE backtest_results (
   id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  signal_ids         UUID[] NOT NULL,
+  hypothesis_id      UUID REFERENCES hypotheses(id),
+  signal_ids         UUID[],
   strategy_name      TEXT NOT NULL,
-  signal_type        TEXT,
   symbol             TEXT NOT NULL,
   lookback_days      INT NOT NULL DEFAULT 730,
   sample_size        INT NOT NULL,
@@ -65,32 +92,29 @@ CREATE TABLE backtest_results (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- AI-identified opportunities (only backtest-validated ones reach here)
 CREATE TABLE opportunities (
   id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  hypothesis_id       UUID REFERENCES hypotheses(id),
   signal_ids          UUID[] NOT NULL,
   backtest_id         UUID REFERENCES backtest_results(id),
-  confidence          NUMERIC NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+  model_confidence    NUMERIC NOT NULL,
   summary             TEXT NOT NULL,
   thesis              TEXT NOT NULL,
+  risk_note           TEXT,
+  historical_note     TEXT,
   action              TEXT NOT NULL CHECK (action IN ('buy', 'sell', 'watch')),
   tickers             TEXT[] NOT NULL DEFAULT '{}',
   expected_return_pct NUMERIC,
   hold_days           INT,
   stop_loss_pct       NUMERIC,
-  historical_context  TEXT,
-  macro_notes         TEXT,
-  embedding           vector(384),
-  raw_response        JSONB,
+  top_features        JSONB,
+  macro_snapshot      JSONB,
+  embedding           vector(1536),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX opportunities_embedding_idx ON opportunities
   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
-
-CREATE TABLE opportunities_signals (
-  opportunity_id UUID NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
-  signal_id      UUID NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
-  PRIMARY KEY (opportunity_id, signal_id)
-);
 
 CREATE TABLE strategies (
   id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -122,24 +146,18 @@ CREATE TABLE trades (
   is_paper         BOOLEAN NOT NULL DEFAULT TRUE,
   pnl_usd          NUMERIC,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  executed_at      TIMESTAMPTZ,
   filled_at        TIMESTAMPTZ
 );
 
 CREATE TABLE positions (
-  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  symbol           TEXT NOT NULL,
-  qty              NUMERIC NOT NULL,
-  avg_entry_price  NUMERIC NOT NULL,
-  current_price    NUMERIC,
-  market_value     NUMERIC,
-  unrealized_pl    NUMERIC,
-  unrealized_plpc  NUMERIC,
-  side             TEXT NOT NULL DEFAULT 'long' CHECK (side IN ('long', 'short')),
-  is_paper         BOOLEAN NOT NULL DEFAULT TRUE,
-  opened_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  closed_at        TIMESTAMPTZ,
-  realized_pnl     NUMERIC,
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  symbol       TEXT NOT NULL,
+  qty          NUMERIC NOT NULL,
+  avg_cost     NUMERIC NOT NULL,
+  is_paper     BOOLEAN NOT NULL DEFAULT TRUE,
+  opened_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at    TIMESTAMPTZ,
+  realized_pnl NUMERIC,
   UNIQUE (user_id, symbol, is_paper)
 );

@@ -1,30 +1,43 @@
 services:
   # ── Message broker ──────────────────────────────────────────────────────────
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.1
-    env_file:
-      - env/zookeeper.env
-    ports:
-      - "2181:2181"
-
-  kafka:
-    image: confluentinc/cp-kafka:7.6.1
-    depends_on:
-      - zookeeper
+  redpanda:
+    image: redpandadata/redpanda:latest
+    platform: linux/arm64
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
     ports:
       - "9092:9092"
-    env_file:
-      - env/kafka.env
+      - "9644:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=localhost:29092"]
+      test: ["CMD", "rpk", "cluster", "health"]
       interval: 5s
       timeout: 10s
       retries: 20
-      start_period: 30s
+      start_period: 15s
+
+  redpanda-console:
+    image: redpandadata/console:latest
+    platform: linux/arm64
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    depends_on:
+      redpanda:
+        condition: service_healthy
 
   # ── Databases ────────────────────────────────────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
+    platform: linux/arm64
     ports:
       - "5432:5432"
     environment:
@@ -34,6 +47,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./db/app_schema.sql:/docker-entrypoint-initdb.d/01_app_schema.sql:ro
+    command: postgres -c shared_buffers=128MB -c max_connections=20
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d eventedge"]
       interval: 5s
@@ -42,6 +56,7 @@ services:
 
   timescale:
     image: timescale/timescaledb:latest-pg16
+    platform: linux/arm64
     ports:
       - "5433:5432"
     environment:
@@ -51,6 +66,7 @@ services:
     volumes:
       - timescale-data:/var/lib/postgresql/data
       - ./db/history_schema.sql:/docker-entrypoint-initdb.d/01_history_schema.sql:ro
+    command: postgres -c shared_buffers=256MB -c max_connections=20
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d market_history"]
       interval: 5s
@@ -59,8 +75,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    platform: linux/arm64
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -69,10 +88,11 @@ services:
 
   pgadmin:
     image: dpage/pgadmin4:latest
+    platform: linux/amd64
     ports:
       - "5050:80"
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@eventedge.com
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
       PGADMIN_DEFAULT_PASSWORD: admin
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
@@ -83,72 +103,124 @@ services:
       - postgres
       - timescale
 
-  # ── Python producers (all 3 in one process) ─────────────────────────────────
-  producer:
-    build: .
+  # ── Python producers ─────────────────────────────────────────────────────────
+  polymarket-producer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m event_detectors.polymarket_producer
+    env_file: env/python.env
     depends_on:
-      kafka:
-        condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: producer
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        until nc -z kafka 29092; do sleep 1; done
-        python -m event_detectors
-    restart: on-failure
-
-  # ── Python consumers (all 3 in one process) ──────────────────────────────────
-  consumer:
-    build: .
-    ports:
-      - "9101:9101"
-    depends_on:
-      kafka:
+      redpanda:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  news-producer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m event_detectors.news_producer
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analytics-producer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m event_detectors.analytics_producer
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Python consumers ─────────────────────────────────────────────────────────
+  polymarket-consumer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m event_processors.polymarket_consumer
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
       redis:
         condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: consumer
-      PROMETHEUS_PORT: "9101"
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        until nc -z kafka 29092; do sleep 1; done
-        python -m event_processors
-    restart: on-failure
+    restart: unless-stopped
 
-  # ── New Python services ──────────────────────────────────────────────────────
+  news-consumer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m event_processors.news_consumer
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analytics-consumer:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m event_processors.analytics_consumer
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Feature store (hourly snapshots + nightly label fill) ───────────────────
+  feature-builder:
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m feature_store.scheduler
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Historical ingestor (nightly OHLCV + FRED macro) ────────────────────────
   historical-ingestor:
-    build: .
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m historical.ingestor
+    env_file: env/python.env
     depends_on:
-      postgres:
-        condition: service_healthy
       timescale:
         condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: historical-ingestor
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        python -m historical
-    restart: on-failure
+    restart: unless-stopped
 
+  # ── AI correlator ────────────────────────────────────────────────────────────
   ai-correlator:
-    build: .
-    ports:
-      - "9105:9105"
+    build: {context: ., dockerfile: Dockerfile}
+    platform: linux/arm64
+    command: python -m ai_correlator.__main__
+    env_file: env/python.env
+    volumes:
+      - ./models:/app/models:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,64 +228,25 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    env_file:
-      - env/python.env
-    environment:
-      SERVICE_NAME: ai-correlator
-      PROMETHEUS_PORT: "9105"
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        python -m ai_correlator.__main__
-    restart: on-failure
+    restart: unless-stopped
 
   # ── Frontend (Next.js App Router — UI + BFF in one) ─────────────────────────
   nextjs:
-    build: ./src/web
+    build: {context: src/web, dockerfile: Dockerfile}
+    platform: linux/arm64
     ports:
       - "3000:3000"
+    env_file: env/nextjs.env
     depends_on:
       postgres:
         condition: service_healthy
-      timescale:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    env_file:
-      - env/nextjs.env
-    restart: on-failure
-
-  # ── Observability ─────────────────────────────────────────────────────────────
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=7d
-
-  grafana:
-    image: grafana/grafana:11.1.0
-    depends_on:
-      - prometheus
-    ports:
-      - "3001:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    restart: unless-stopped
 
 volumes:
+  redpanda-data:
   postgres-data:
   timescale-data:
+  redis-data:
   pgadmin-data:
-  prometheus-data:
-  grafana-data:

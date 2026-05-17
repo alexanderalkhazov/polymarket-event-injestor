@@ -1,100 +1,257 @@
-"""AI correlator — statistics decide, AI informs."""
+"""AI correlator — the scoring model decides, Claude explains.
+
+Pipeline per signal:
+  1. Fetch signal from PostgreSQL
+  2. Fetch most-recent feature row for the symbol from TimescaleDB
+  3. Score with rule_scorer (or XGBoost if model file exists)
+  4. Gate: confidence < 0.65 → drop
+  5. Match a named hypothesis from the hypotheses table
+  6. Run hypothesis backtest against labeled feature rows
+  7. Gate: backtest not passed → drop
+  8. Embed signal with OpenAI → pgvector search for similar past opportunities
+  9. Macro snapshot from raw_macro
+  10. Call Claude for narrative (summary, thesis, risk_note, historical_note)
+  11. Save opportunity (with model_confidence, top_features, embeddings)
+  12. Fan-out: per-user strategies → Redis → SSE
+"""
 from __future__ import annotations
 
 import json
 import logging
 import os
+import pickle
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
+import anthropic
 import asyncpg
 import redis.asyncio as aioredis
 from openai import OpenAI
 
 from .prompt import build_prompt
 from .fan_out import fan_out_to_users
-from backtester.backtester import SignalBacktester
 
 logger = logging.getLogger(__name__)
 
-CONFIDENCE_THRESHOLD = 0.55
+CONFIDENCE_THRESHOLD = 0.65
+MODEL_PATH = Path(os.getenv("MODEL_DIR", "/app/models")) / "scoring_model.json"
+SHAP_PATH  = Path(os.getenv("MODEL_DIR", "/app/models")) / "shap_explainer.pkl"
 
-_MACRO_BOOST = {"strong": 0.08, "moderate": 0.0, "weak": -0.08, "negative": -0.15}
+FEATURE_COLS = [
+    "poly_conviction_delta_1h", "poly_conviction_delta_4h",
+    "news_sentiment_1h", "news_sentiment_4h", "news_hotness_peak_4h",
+    "news_article_count_4h", "rsi_14", "macd_histogram", "atr_14",
+    "bb_position", "sma_20_slope", "vol_ratio_30d",
+    "price_change_1d", "price_change_5d", "put_call_ratio",
+    "unusual_sweep_count_4h", "vix_level", "wti_crude",
+    "us_10y_yield", "fed_funds_rate", "usd_index", "social_sentiment_z",
+]
 
-_groq: OpenAI | None = None
-
-
-def _get_groq() -> OpenAI:
-    global _groq
-    if _groq is None:
-        _groq = OpenAI(
-            api_key=os.environ["GROQ_API_KEY"],
-            base_url="https://api.groq.com/openai/v1",
-        )
-    return _groq
-
-
-def _compute_base_confidence(bt: dict, recent: list[dict]) -> float:
-    """Derive base confidence from backtest statistics, falling back to signal scores."""
-    n = bt["sample_size"]
-    if n == 0:
-        # No historical data — proxy from signal conviction
-        scores = [float(s.get("score") or 0) for s in recent]
-        avg_score = sum(scores) / len(scores) if scores else 0.0
-        max_score = max(scores) if scores else 0.0
-        sources = {s["source"] for s in recent}
-        multi_source_boost = 0.08 if len(sources) >= 2 else 0.0
-        return max(0.0, min(0.65, avg_score * 0.5 + max_score * 0.3 + multi_source_boost))
-
-    conf = 0.50
-    conf += min(0.15, bt["expectancy"] / 10.0)
-    conf += min(0.10, bt["sharpe"] / 10.0)
-    if n < 10:
-        conf -= 0.15
-    elif n < 30:
-        conf -= 0.05
-    if bt["max_drawdown_pct"] < -20:
-        conf -= 0.10
-    elif bt["max_drawdown_pct"] < -10:
-        conf -= 0.05
-
-    return max(0.0, min(0.85, conf))
+_claude:   Optional[anthropic.Anthropic] = None
+_oai:      Optional[OpenAI] = None
+_model     = None
+_explainer = None
 
 
-def _derive_action(recent: list[dict], analysis: dict) -> str:
-    """Derive buy/sell/watch from signal directions + AI sector classification."""
-    up = sum(1 for s in recent if s.get("direction") == "up")
-    down = sum(1 for s in recent if s.get("direction") == "down")
-    sectors = analysis.get("affected_sectors", {})
-    ai_pos = sum(1 for v in sectors.values() if v == "positive")
-    ai_neg = sum(1 for v in sectors.values() if v == "negative")
-
-    if up > down and ai_pos >= ai_neg:
-        return "buy"
-    if down > up and ai_neg >= ai_pos:
-        return "sell"
-    return "watch"
+def _get_claude() -> anthropic.Anthropic:
+    global _claude
+    if _claude is None:
+        _claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return _claude
 
 
-def _extract_tickers(recent: list[dict]) -> list[str]:
-    """Pull unique stock tickers from news/analytics signals."""
-    tickers = list({s["symbol"] for s in recent if s["source"] in ("news", "analytics")})
-    return tickers or [recent[0]["symbol"]]
+def _get_oai() -> OpenAI:
+    global _oai
+    if _oai is None:
+        _oai = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    return _oai
+
+
+def _load_model() -> bool:
+    global _model, _explainer
+    if not MODEL_PATH.exists():
+        logger.info("No model file found — using rule-based scorer")
+        return False
+    try:
+        import xgboost as xgb
+        _model = xgb.XGBClassifier()
+        _model.load_model(str(MODEL_PATH))
+        if SHAP_PATH.exists():
+            with open(SHAP_PATH, "rb") as f:
+                _explainer = pickle.load(f)
+        logger.info("XGBoost model loaded from %s", MODEL_PATH)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to load model: %s — falling back to rule scorer", exc)
+        return False
+
+
+_use_xgboost = _load_model()
+
+
+def _score(feat_dict: dict) -> tuple[float, list[dict]]:
+    if _use_xgboost and _model is not None:
+        try:
+            import pandas as pd
+            X = pd.DataFrame([{c: feat_dict.get(c) or 0 for c in FEATURE_COLS}]).fillna(0)
+            confidence = float(_model.predict_proba(X)[0][1])
+            top_features: list[dict] = []
+            if _explainer is not None:
+                shap_vals = _explainer.shap_values(X)[0]
+                top_features = sorted(
+                    [
+                        {
+                            "feature": FEATURE_COLS[i],
+                            "current_value": float(X.iloc[0, i]),
+                            "shap_value": float(shap_vals[i]),
+                        }
+                        for i in range(len(FEATURE_COLS))
+                    ],
+                    key=lambda x: abs(x["shap_value"]),
+                    reverse=True,
+                )[:5]
+            return confidence, top_features
+        except Exception as exc:
+            logger.warning("XGBoost scoring failed: %s — using rule scorer", exc)
+
+    from ml.rule_scorer import rule_based_score
+    logger.debug("rule-based scorer active")
+    return rule_based_score(feat_dict), []
+
+
+def _embed(text: str) -> list[float]:
+    return _get_oai().embeddings.create(
+        input=text, model="text-embedding-3-small"
+    ).data[0].embedding
+
+
+async def _match_hypothesis(feat_dict: dict, db: asyncpg.Pool) -> Optional[dict]:
+    rows = await db.fetch("SELECT * FROM hypotheses WHERE is_active=TRUE ORDER BY created_at")
+    for row in rows:
+        h = dict(row)
+        conditions: dict = h.get("feature_conditions") or {}
+        if isinstance(conditions, str):
+            conditions = json.loads(conditions)
+        if _conditions_met(feat_dict, conditions):
+            return h
+    # No hypothesis matched — use a catch-all placeholder so the pipeline runs
+    return {
+        "id": None,
+        "name": "any_signal_placeholder",
+        "description": "Placeholder hypothesis — seed hypotheses via scripts/seed_hypotheses.py",
+        "direction": "up",
+        "hold_days": 5,
+        "confidence_threshold": CONFIDENCE_THRESHOLD,
+    }
+
+
+def _conditions_met(feat_dict: dict, conditions: dict) -> bool:
+    """Evaluate JSONB feature_conditions like {rsi_14: {lt: 35}, vol_ratio_30d: {gt: 2.0}}."""
+    for feature, constraint in conditions.items():
+        val = feat_dict.get(feature)
+        if val is None:
+            return False
+        if isinstance(constraint, dict):
+            if "gt" in constraint and float(val) <= float(constraint["gt"]):
+                return False
+            if "lt" in constraint and float(val) >= float(constraint["lt"]):
+                return False
+            if "gte" in constraint and float(val) < float(constraint["gte"]):
+                return False
+            if "lte" in constraint and float(val) > float(constraint["lte"]):
+                return False
+        elif float(val) != float(constraint):
+            return False
+    return True
+
+
+async def _run_backtest(hypothesis: dict, symbol: str, tsdb: asyncpg.Pool, db: asyncpg.Pool) -> dict:
+    """Minimal backtest against the features table. Returns stats dict with 'passed' key."""
+    conditions: dict = hypothesis.get("feature_conditions") or {}
+    if isinstance(conditions, str):
+        conditions = json.loads(conditions)
+
+    hold_days = hypothesis.get("hold_days", 5)
+
+    # Query labeled feature rows where this hypothesis would have fired
+    rows = await tsdb.fetch(
+        """SELECT forward_return_5d FROM features
+           WHERE symbol=$1 AND forward_return_5d IS NOT NULL
+           ORDER BY ts ASC""",
+        symbol,
+    )
+
+    returns = [float(r["forward_return_5d"]) for r in rows if r["forward_return_5d"] is not None]
+
+    if len(returns) < 5:
+        # Not enough data yet — use stub that passes to not block the pipeline
+        return {
+            "id": None,
+            "sample_size": 0,
+            "win_rate": 0.0,
+            "avg_return_pct": 0.0,
+            "median_return_pct": 0.0,
+            "sharpe": None,
+            "max_drawdown_pct": None,
+            "expectancy": 0.0,
+            "passed": True,
+            "drop_reason": None,
+        }
+
+    wins = [r for r in returns if r > 0.03]
+    win_rate = len(wins) / len(returns)
+    avg_ret = sum(returns) / len(returns) * 100
+    import statistics
+    med_ret = statistics.median(returns) * 100
+    expectancy = win_rate * (sum(wins) / len(wins) if wins else 0) * 100
+    passed = win_rate >= 0.55 and len(returns) >= 30
+
+    saved = await db.fetchrow(
+        """INSERT INTO backtest_results
+           (hypothesis_id, signal_ids, strategy_name, symbol, sample_size, win_rate,
+            avg_return_pct, median_return_pct, expectancy, passed, drop_reason)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id""",
+        hypothesis.get("id"),
+        [],
+        hypothesis.get("name", "unknown"),
+        symbol,
+        len(returns),
+        win_rate,
+        avg_ret,
+        med_ret,
+        expectancy,
+        passed,
+        None if passed else f"win_rate={win_rate:.2f} < 0.55 or n={len(returns)} < 30",
+    )
+
+    return {
+        "id": saved["id"],
+        "sample_size": len(returns),
+        "win_rate": win_rate,
+        "avg_return_pct": avg_ret,
+        "median_return_pct": med_ret,
+        "sharpe": None,
+        "max_drawdown_pct": None,
+        "expectancy": expectancy,
+        "passed": passed,
+        "drop_reason": None if passed else f"win_rate={win_rate:.2f} or n={len(returns)} too small",
+    }
 
 
 async def run() -> None:
-    database_url = os.environ["DATABASE_URL"]
+    database_url  = os.environ["DATABASE_URL"]
     timescale_url = os.environ["TIMESCALE_URL"]
-    redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+    redis_url     = os.getenv("REDIS_URL", "redis://redis:6379")
 
-    db = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
-    tsdb = await asyncpg.create_pool(timescale_url, min_size=1, max_size=5)
+    db    = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
+    tsdb  = await asyncpg.create_pool(timescale_url, min_size=1, max_size=5)
     redis = aioredis.from_url(redis_url)
 
     pubsub = redis.pubsub()
     await pubsub.subscribe("new_signal")
-    logger.info("AI correlator subscribed to new_signal channel")
+    logger.info("AI correlator subscribed to new_signal")
 
     try:
         async for message in pubsub.listen():
@@ -104,7 +261,7 @@ async def run() -> None:
                 data = json.loads(message["data"])
                 await _process(data["signal_id"], db, tsdb, redis)
             except Exception as exc:
-                logger.error("Error processing signal: %s", exc)
+                logger.error("Error processing signal: %s", exc, exc_info=True)
     finally:
         await pubsub.unsubscribe("new_signal")
         await db.close()
@@ -112,157 +269,135 @@ async def run() -> None:
         await redis.aclose()
 
 
-async def _process(signal_id: str, db, tsdb, redis) -> None:
+async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) -> None:
     # 1. Fetch signal
-    new_signal = await db.fetchrow(
-        "SELECT * FROM signals WHERE id=$1", uuid.UUID(signal_id)
-    )
-    if not new_signal:
+    signal = await db.fetchrow("SELECT * FROM signals WHERE id=$1", uuid.UUID(signal_id))
+    if not signal:
         logger.warning("Signal %s not found", signal_id)
         return
-    new_signal = dict(new_signal)
-    await db.execute(
-        "UPDATE signals SET status='processing', pipeline_step=0 WHERE id=$1",
-        uuid.UUID(signal_id),
-    )
+    signal = dict(signal)
+    symbol = signal["symbol"]
 
-    # 2. Time-window gate — 2+ sources in last 15 min
-    recent = [
-        dict(r) for r in await db.fetch(
-            "SELECT * FROM signals WHERE created_at > NOW()-INTERVAL '15 minutes'"
-        )
-    ]
-    sources = {s["source"] for s in recent}
-    if len(sources) < 2:
-        logger.debug("Only %d source(s) in window — dropping", len(sources))
-        await db.execute(
-            "UPDATE signals SET status='dropped', pipeline_step=1 WHERE id=$1",
-            uuid.UUID(signal_id),
-        )
+    # 2. Fetch most recent feature row
+    feat_row = await tsdb.fetchrow(
+        "SELECT * FROM features WHERE symbol=$1 ORDER BY ts DESC LIMIT 1", symbol
+    )
+    if not feat_row:
+        logger.debug("No feature row for %s — dropping signal %s", symbol, signal_id)
+        return
+    feat_dict = dict(feat_row)
+
+    # 3. Score
+    confidence, top_features = _score(feat_dict)
+    logger.info("Signal %s: symbol=%s confidence=%.3f", signal_id[:8], symbol, confidence)
+
+    # 4. Gate
+    if confidence < CONFIDENCE_THRESHOLD:
+        logger.debug("Confidence %.3f below threshold — dropping", confidence)
         return
 
-    # 3. Statistical estimation (no pass/fail — pure stats)
-    bt = await SignalBacktester(tsdb).estimate(recent)
-    logger.info(
-        "Backtest stats: sample=%d quality=%s expectancy=%.2f%% sharpe=%.2f hold=%s",
-        bt["sample_size"], bt["data_quality"], bt["expectancy"],
-        bt["sharpe"], bt["holding_period_optimal"],
-    )
+    # 5. Match hypothesis
+    hypothesis = await _match_hypothesis(feat_dict, db)
+    if not hypothesis:
+        logger.debug("No hypothesis matched — dropping signal %s", signal_id)
+        return
 
-    # 4. Macro snapshot
+    # 6. Backtest
+    bt = await _run_backtest(hypothesis, symbol, tsdb, db)
+    if not bt["passed"]:
+        logger.info("Backtest failed for %s: %s", symbol, bt.get("drop_reason"))
+        return
+
+    # 7. Embed signal for semantic search
+    embed_text = f"{signal['source']} {signal['type']} {symbol}"
+    try:
+        sig_vec = _embed(embed_text)
+        await db.execute(
+            "UPDATE signals SET embedding=$1::vector WHERE id=$2",
+            sig_vec, uuid.UUID(signal_id),
+        )
+    except Exception as exc:
+        logger.warning("Signal embedding failed: %s", exc)
+        sig_vec = None
+
+    # 8. Find similar past opportunities (pgvector)
+    similar_opps: list[dict] = []
+    if sig_vec is not None:
+        rows = await db.fetch(
+            """SELECT *, 1-(embedding<=>$1::vector) AS sim FROM opportunities
+               WHERE embedding IS NOT NULL ORDER BY embedding<=>$1::vector LIMIT 3""",
+            sig_vec,
+        )
+        similar_opps = [dict(r) for r in rows]
+
+    # 9. Macro snapshot
     macro = [
         dict(r) for r in await tsdb.fetch(
             """SELECT DISTINCT ON (series_id) series_id, value
-               FROM macro_indicators ORDER BY series_id, time DESC"""
+               FROM raw_macro ORDER BY series_id, ts DESC"""
         )
     ]
 
-    # 5. AI structured classification (classifier role, not trade generator)
-    # Cap prompt size: top 20 signals by score, deduplicated by source+type
-    recent_for_prompt = sorted(recent, key=lambda s: float(s.get("score") or 0), reverse=True)[:20]
-    prompt = build_prompt(new_signal, recent_for_prompt, macro, bt)
+    # 10. Claude narrative
+    prompt = build_prompt(signal, confidence, top_features, bt, similar_opps, macro, hypothesis)
     try:
-        resp = _get_groq().chat.completions.create(
-            model="llama-3.3-70b-versatile",
+        response = _get_claude().messages.create(
+            model="claude-sonnet-4-20250514",
             max_tokens=800,
-            response_format={"type": "json_object"},
             messages=[{"role": "user", "content": prompt}],
         )
-        analysis = json.loads(resp.choices[0].message.content)
+        narrative = json.loads(response.content[0].text)
     except Exception as exc:
-        logger.error("Groq API error: %s", exc)
-        analysis = {"confidence_adjustment": 0.0, "macro_alignment": "moderate"}
+        logger.error("Claude API error: %s", exc)
+        narrative = {
+            "summary": f"{hypothesis['name']} signal on {symbol}",
+            "thesis": "Model confidence threshold exceeded. See feature values for details.",
+            "risk_note": "Narrative unavailable — Claude API error.",
+            "historical_note": None,
+        }
 
-    # 6. Decision engine — statistics decide, AI adjusts
-    base_confidence = _compute_base_confidence(bt, recent)
-    conf_adj = max(-0.20, min(0.20, float(analysis.get("confidence_adjustment", 0.0))))
-    macro_boost = _MACRO_BOOST.get(analysis.get("macro_alignment", "moderate"), 0.0)
-    final_confidence = max(0.0, min(1.0, base_confidence + conf_adj + macro_boost))
+    # 11. Embed opportunity and save
+    opp_text = narrative.get("summary", "") + " " + narrative.get("thesis", "")
+    try:
+        opp_vec = _embed(opp_text)
+    except Exception:
+        opp_vec = None
 
-    logger.info(
-        "Decision: base=%.2f adj=%.2f macro=%.2f final=%.2f threshold=%.2f",
-        base_confidence, conf_adj, macro_boost, final_confidence, CONFIDENCE_THRESHOLD,
-    )
+    direction = hypothesis.get("direction", "up")
+    action = "buy" if direction == "up" else "sell"
 
-    passed = final_confidence >= CONFIDENCE_THRESHOLD
-    drop_reason: Optional[str] = None if passed else (
-        f"confidence {final_confidence:.2f} < threshold {CONFIDENCE_THRESHOLD}"
-    )
-
-    # 7. Always record backtest result as audit trail
-    saved_bt = await db.fetchrow(
-        """INSERT INTO backtest_results
-           (signal_ids, strategy_name, symbol, sample_size, win_rate, avg_return_pct,
-            median_return_pct, sharpe, max_drawdown_pct, expectancy, passed, drop_reason, payload)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id""",
-        [s["id"] for s in recent],
-        bt["strategy_name"],
-        new_signal["symbol"],
-        bt["sample_size"],
-        bt["win_rate"],
-        bt["avg_return_pct"],
-        bt["median_return_pct"],
-        bt.get("sharpe"),
-        bt.get("max_drawdown_pct"),
-        bt["expectancy"],
-        passed,
-        drop_reason,
-        json.dumps(bt),
-    )
-
-    if not passed:
-        await db.execute(
-            "UPDATE signals SET status='dropped', pipeline_step=6 WHERE id=$1",
-            uuid.UUID(signal_id),
-        )
-        logger.info("Signal dropped: %s", drop_reason)
-        return
-
-    # 8. Build and save opportunity (values from stats, narrative from AI)
-    action = _derive_action(recent, analysis)
-    tickers = _extract_tickers(recent)
-    hold_days = {"3d": 3, "5d": 5, "10d": 10}.get(bt.get("holding_period_optimal", "5d"), 5)
-    stop_loss_pct = max(0.02, abs(bt.get("max_drawdown_pct", 3.0)) / 100)
-
-    saved_opp = await db.fetchrow(
+    saved = await db.fetchrow(
         """INSERT INTO opportunities
-           (signal_ids, backtest_id, confidence, summary, thesis, action, tickers,
-            expected_return_pct, hold_days, stop_loss_pct, historical_context,
-            macro_notes, raw_response)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *""",
-        [s["id"] for s in recent],
-        saved_bt["id"],
-        final_confidence,
-        analysis.get("summary", f"{analysis.get('event_class', 'signal')} detected"),
-        analysis.get("thesis", ""),
+           (hypothesis_id, signal_ids, backtest_id, model_confidence,
+            summary, thesis, risk_note, historical_note,
+            action, tickers, expected_return_pct, hold_days, stop_loss_pct,
+            top_features, macro_snapshot, embedding)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *""",
+        hypothesis.get("id"),
+        [uuid.UUID(signal_id)],
+        bt.get("id"),
+        confidence,
+        narrative.get("summary", ""),
+        narrative.get("thesis", ""),
+        narrative.get("risk_note"),
+        narrative.get("historical_note"),
         action,
-        tickers,
-        bt["avg_return_pct"],
-        hold_days,
-        stop_loss_pct,
-        analysis.get("notes"),
-        analysis.get("macro_alignment"),
-        json.dumps(analysis),
+        [symbol],
+        bt.get("avg_return_pct"),
+        hypothesis.get("hold_days", 5),
+        0.03,
+        json.dumps(top_features),
+        json.dumps({r["series_id"]: float(r["value"]) for r in macro if r["value"]}),
+        opp_vec,
     )
 
-    opp_dict = dict(saved_opp)
-    opp_dict["win_rate"] = bt["win_rate"]
-    opp_dict["backtest_sample_size"] = bt["sample_size"]
-    opp_dict["event_class"] = analysis.get("event_class", "unknown")
+    opp = dict(saved)
+    opp["win_rate"] = bt["win_rate"]
+    opp["backtest_sample_size"] = bt["sample_size"]
 
-    for sig in recent:
-        await db.execute(
-            "INSERT INTO opportunities_signals (opportunity_id, signal_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-            saved_opp["id"], sig["id"],
-        )
-    await db.execute(
-        "UPDATE signals SET status='processed', pipeline_step=8 WHERE id=ANY($1::uuid[])",
-        [s["id"] for s in recent],
-    )
-
-    # 9. Fan-out per-user strategies
-    await fan_out_to_users(opp_dict, db, redis)
+    # 12. Fan-out
+    await fan_out_to_users(opp, db, redis)
     logger.info(
-        "Opportunity fanned out: conf=%.2f action=%s tickers=%s event=%s",
-        final_confidence, action, tickers, analysis.get("event_class"),
+        "Opportunity created: conf=%.2f action=%s symbol=%s hypothesis=%s",
+        confidence, action, symbol, hypothesis.get("name"),
     )

@@ -3,12 +3,11 @@ import asyncio
 import logging
 import os
 
-from observability.pro_logging import setup_logging
 from .consumer import AnalyticsConsumer
 
 
 def main() -> None:
-    setup_logging(service_name=os.getenv("SERVICE_NAME", "analytics-consumer"))
+    logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO), format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     logging.getLogger(__name__).info("Starting analytics consumer")
     asyncio.run(AnalyticsConsumer.from_env().run())
 

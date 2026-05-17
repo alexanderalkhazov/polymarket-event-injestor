@@ -1,59 +1,66 @@
-"""Build the Groq prompt — AI is a structured classifier, not a trade generator."""
+"""Build the Claude narrative prompt. Claude explains, the model decides."""
 from __future__ import annotations
 
 
-def sig_text(s: dict) -> str:
-    payload = s.get("payload") or {}
-    if isinstance(payload, str):
-        import json
-        try:
-            payload = json.loads(payload)
-        except Exception:
-            payload = {}
-    urgency = payload.get("urgency", "")
-    ci = payload.get("confidence_interval", [])
-    ci_str = f" ci={ci}" if ci else ""
-    return (
-        f"source={s['source']:<12} type={s['type']:<18} "
-        f"symbol={s['symbol'][:20]:<20} score={s['score']:.3f}"
-        f"{' urgency=' + urgency if urgency else ''}{ci_str}"
-    )
+def build_prompt(
+    signal: dict,
+    confidence: float,
+    top_features: list[dict],
+    bt: dict,
+    similar_opps: list[dict],
+    macro: list[dict],
+    hypothesis: dict,
+) -> str:
+    top_feat_str = "\n".join(
+        f"  {f['feature']}: {f['current_value']:.3f} "
+        f"({'supports' if f['shap_value'] > 0 else 'weighs against'}, "
+        f"impact {abs(f['shap_value']):.3f})"
+        for f in top_features
+    ) or "  rule-based scoring active (model not yet trained)"
 
+    similar_str = "\n".join(
+        f"  [{o.get('sim', 0):.0%} match] {o['summary']} — conf {o['model_confidence']:.0%}"
+        for o in similar_opps
+    ) or "  none found"
 
-def build_prompt(new_signal: dict, recent: list, macro: list, bt: dict) -> str:
-    recent_str = "\n".join(f"  {sig_text(s)}" for s in recent)
-    macro_str = "\n".join(f"  {r['series_id']}: {r['value']}" for r in macro) or "  unavailable"
+    macro_str = "\n".join(
+        f"  {r['series_id']}: {r['value']}" for r in macro
+    ) or "  unavailable"
 
-    return f"""You are a structured market event classifier. Your role is to INTERPRET and CLASSIFY signals — not to generate trades.
+    return f"""You are a trading strategy analyst. A quantitative model has identified a
+prediction. Your ONLY job is to explain it clearly in four fields.
+Do NOT question the numbers. Do NOT add your own probability estimates.
+Do NOT say whether this is a good or bad trade. Just explain what the model found.
 
-SIGNAL CLUSTER ({len(recent)} signals, {len({s['source'] for s in recent})} sources, last 15 min):
-{recent_str}
+HYPOTHESIS: {hypothesis['name']}
+  {hypothesis['description']}
 
-BACKTEST STATISTICS (how similar setups performed historically):
-  sample_size={bt['sample_size']}  data_quality={bt['data_quality']}
-  win_rate={bt['win_rate']:.0%}    expectancy={bt['expectancy']:+.2f}%/trade
-  sharpe={bt['sharpe']:.2f}        max_drawdown={bt['max_drawdown_pct']:.1f}%
-  optimal_hold={bt['holding_period_optimal']}
+PREDICTION:
+  Symbol: {signal['symbol']}
+  Model confidence: {confidence:.0%}
+  Historical win rate: {bt['win_rate']:.0%} over {bt['sample_size']} occurrences
+  Avg return: {bt['avg_return_pct']:.2f}% over {hypothesis.get('hold_days', 5)} days
+  Expectancy: {bt['expectancy']:.2f}% per trade
 
-CURRENT MACRO CONDITIONS:
+TOP FEATURES DRIVING MODEL SCORE (SHAP values):
+{top_feat_str}
+
+SIMILAR PAST OPPORTUNITIES:
+{similar_str}
+
+CURRENT MACRO:
 {macro_str}
 
-INSTRUCTIONS:
-- Classify the event type and identify which sectors are affected.
-- Estimate a confidence_adjustment in the range [-0.20, +0.20].
-  Use NEGATIVE adjustments for: conflicting signals, poor macro alignment, event ambiguity.
-  Use POSITIVE adjustments for: strong cross-source confirmation, clear macro tailwind, high-impact event.
-- Do NOT invent trade ideas. Do NOT speculate beyond what the signals indicate.
-- summary must be one plain-English sentence a non-expert can understand.
-- thesis must be 1-2 sentences on what happened and why it matters quantitatively.
+Write exactly these four fields. Keep each tight.
+- summary: one sentence, plain English, no jargon, no numbers except the symbol
+- thesis: two to three sentences explaining what signals aligned and why they matter together
+- risk_note: one sentence on the main thing that could invalidate this setup
+- historical_note: one sentence referencing a similar past opportunity if found, else null
 
-Respond ONLY in valid JSON with no preamble:
+Respond ONLY in valid JSON, no preamble, no markdown:
 {{
-  "event_class": "<earnings_surprise|macro_shift|conviction_shift|volume_anomaly|news_catalyst|regulatory|sector_rotation|liquidity_event|other>",
-  "affected_sectors": {{"<sector>": "<positive|negative|neutral>"}},
-  "confidence_adjustment": <float -0.20 to +0.20>,
-  "macro_alignment": "<strong|moderate|weak|negative>",
-  "summary": "<one sentence, plain English>",
-  "thesis": "<1-2 sentences: what happened and why it matters>",
-  "notes": "<historical context if relevant, or null>"
+  "summary": "...",
+  "thesis": "...",
+  "risk_note": "...",
+  "historical_note": "..." or null
 }}"""

@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 COOLDOWN_HOURS = 4
 MIN_SIGNAL_SCORE = 0.15
 
-# Detection thresholds (used to determine if a signal fires at all)
 VOLUME_SPIKE_RATIO = 1.8
 PRICE_MOVE_PCT = 4.0
 RSI_OVERBOUGHT = 72.0
@@ -27,7 +26,6 @@ PC_RATIO_LOW = 0.40
 
 
 def _score_volume(ratio: float) -> Tuple[float, str, list]:
-    """Score proportional to how far ratio exceeds the threshold."""
     score = round(min(1.0, (ratio - 1.0) / 6.0), 4)
     urgency = "high" if score >= 0.6 else "medium" if score >= 0.3 else "low"
     ci = [round(max(0.0, score - 0.10), 3), round(min(1.0, score + 0.10), 3)]
@@ -42,7 +40,6 @@ def _score_momentum(pct: float) -> Tuple[float, str, list]:
 
 
 def _score_rsi(rsi: float) -> Tuple[float, str, list]:
-    # Distance from neutral (50), normalised to [0, 1]
     distance = round(abs(rsi - 50.0) / 50.0, 4)
     urgency = "high" if distance >= 0.60 else "medium" if distance >= 0.40 else "low"
     ci = [round(max(0.0, distance - 0.05), 3), round(min(1.0, distance + 0.05), 3)]
@@ -50,7 +47,6 @@ def _score_rsi(rsi: float) -> Tuple[float, str, list]:
 
 
 def _score_options(pcr: float) -> Tuple[float, str, list]:
-    # Deviation from neutral put/call ratio of 1.0, capped at max deviation of 4.0
     score = round(min(1.0, abs(pcr - 1.0) / 4.0), 4)
     urgency = "high" if score >= 0.6 else "medium" if score >= 0.3 else "low"
     ci = [round(max(0.0, score - 0.12), 3), round(min(1.0, score + 0.12), 3)]
@@ -64,15 +60,18 @@ class AnalyticsConsumer:
         topic: str,
         group_id: str,
         database_url: str,
+        timescale_url: str,
         redis_url: str,
     ) -> None:
         self._bootstrap_servers = bootstrap_servers
         self._topic = topic
         self._group_id = group_id
         self._database_url = database_url
+        self._timescale_url = timescale_url
         self._redis_url = redis_url
         self._cooldowns: Dict[Tuple[str, str], datetime] = {}
         self._pool: Optional[asyncpg.Pool] = None
+        self._tsdb: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
 
     @classmethod
@@ -82,6 +81,7 @@ class AnalyticsConsumer:
             topic=os.getenv("KAFKA_TOPIC", "raw.analytics"),
             group_id=os.getenv("KAFKA_GROUP_ID", "analytics-consumer"),
             database_url=os.environ["DATABASE_URL"],
+            timescale_url=os.environ["TIMESCALE_URL"],
             redis_url=os.getenv("REDIS_URL", "redis://redis:6379"),
         )
 
@@ -94,6 +94,7 @@ class AnalyticsConsumer:
 
     async def run(self) -> None:
         self._pool = await asyncpg.create_pool(self._database_url, min_size=1, max_size=5)
+        self._tsdb = await asyncpg.create_pool(self._timescale_url, min_size=1, max_size=3)
         self._redis = aioredis.from_url(self._redis_url)
 
         consumer = Consumer({
@@ -122,6 +123,8 @@ class AnalyticsConsumer:
             consumer.close()
             if self._pool:
                 await self._pool.close()
+            if self._tsdb:
+                await self._tsdb.close()
             if self._redis:
                 await self._redis.aclose()
 
@@ -129,7 +132,42 @@ class AnalyticsConsumer:
         ticker = raw.get("ticker", "")
         now = datetime.now(timezone.utc)
 
-        # Each entry: (signal_type, score, urgency, ci, direction)
+        ts = now
+        if raw.get("fetched_at"):
+            try:
+                ts = datetime.fromisoformat(raw["fetched_at"])
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        # Write price snapshot to raw_ohlcv (close + volume; open/high/low from historical ingestor)
+        current_price = raw.get("current_price")
+        current_volume = raw.get("current_volume")
+        if current_price is not None and current_volume is not None:
+            try:
+                await self._tsdb.execute(
+                    """INSERT INTO raw_ohlcv (ts, symbol, interval, close, volume)
+                       VALUES ($1, $2, '1h', $3, $4) ON CONFLICT DO NOTHING""",
+                    ts, ticker, current_price, int(current_volume),
+                )
+            except Exception as exc:
+                logger.warning("raw_ohlcv write failed: %s", exc)
+
+        # Write options snapshot to raw_options
+        put_vol = raw.get("put_volume")
+        call_vol = raw.get("call_volume")
+        if put_vol is not None or call_vol is not None:
+            try:
+                await self._tsdb.execute(
+                    """INSERT INTO raw_options (ts, symbol, put_volume, call_volume, unusual_sweeps)
+                       VALUES ($1, $2, $3, $4, 0) ON CONFLICT DO NOTHING""",
+                    ts, ticker, put_vol, call_vol,
+                )
+            except Exception as exc:
+                logger.warning("raw_options write failed: %s", exc)
+
+        # Signal detection
         signals: List[Tuple[str, float, str, list, Optional[str]]] = []
 
         cur_vol = raw.get("current_volume")

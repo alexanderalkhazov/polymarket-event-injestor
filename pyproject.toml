@@ -1,18 +1,21 @@
 [project]
 name = "eventedge-ai"
-version = "0.3.0"
-description = "Algo trading system — three signal pipelines, backtester, Claude AI correlator"
+version = "0.4.0"
+description = "Algo trading system — feature store, XGBoost scoring, Claude narrative, Alpaca execution"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Kafka
+    # Message broker
     "confluent-kafka>=2.3.0",
     # PostgreSQL (app DB + TimescaleDB)
     "asyncpg>=0.29",
     # Redis
     "redis>=5.0",
-    # AI (Groq via openai-compatible SDK)
+    # AI APIs
+    "anthropic>=0.25",
     "openai>=1.30",
+    # Auth utilities (seed scripts)
+    "bcrypt>=4.0",
     # Data sources
     "yfinance>=0.2.40",
     "requests>=2.32.0",
@@ -20,16 +23,16 @@ dependencies = [
     "fredapi>=0.5",
     # Data processing
     "pandas>=2.2",
-    "ta>=0.11",
     "numpy>=1.26",
+    # ML
+    "xgboost>=2.0",
+    "shap>=0.44",
+    "scikit-learn>=1.4",
     # Schema / config
     "pydantic>=2.12",
     "python-dotenv>=1.0.0",
-    # Scheduling (historical ingestor)
+    # Scheduling
     "schedule>=1.2",
-    # Observability
-    "prometheus-client>=0.21.1",
-    "structlog>=24.0",
 ]
 
 [project.optional-dependencies]

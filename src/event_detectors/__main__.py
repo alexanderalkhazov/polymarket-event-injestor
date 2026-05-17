@@ -3,7 +3,6 @@ import asyncio
 import logging
 import os
 
-from observability.pro_logging import setup_logging
 from event_detectors.polymarket_producer.runner import PolymarketProducer
 from event_detectors.polymarket_producer.config import load_config as load_poly_config
 from event_detectors.news_producer.runner import NewsProducer
@@ -29,7 +28,7 @@ async def _run(name: str, coro) -> None:
 
 
 async def main() -> None:
-    setup_logging(service_name=os.getenv("SERVICE_NAME", "producer"))
+    logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO), format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     logging.getLogger(__name__).info("Starting combined producer (polymarket + news + analytics)")
     await asyncio.gather(
         _run("polymarket", PolymarketProducer(load_poly_config()).start()),

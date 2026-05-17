@@ -48,18 +48,10 @@ def _score_signal(article: dict, now: datetime) -> Tuple[float, str, list]:
     keyword_mult = min(2.0, 1.0 + keyword_hits * 0.25)
 
     score = round(recency * credibility * keyword_mult, 4)
-
-    # Confidence interval: known sources → narrower CI
     ci_half = round(0.08 + (1.0 - credibility) * 0.12, 3)
     ci = [round(max(0.0, score - ci_half), 3), round(min(1.0, score + ci_half), 3)]
 
-    if score >= 0.70:
-        urgency = "high"
-    elif score >= 0.40:
-        urgency = "medium"
-    else:
-        urgency = "low"
-
+    urgency = "high" if score >= 0.70 else "medium" if score >= 0.40 else "low"
     return score, urgency, ci
 
 
@@ -70,15 +62,18 @@ class NewsConsumer:
         topic: str,
         group_id: str,
         database_url: str,
+        timescale_url: str,
         redis_url: str,
     ) -> None:
         self._bootstrap_servers = bootstrap_servers
         self._topic = topic
         self._group_id = group_id
         self._database_url = database_url
+        self._timescale_url = timescale_url
         self._redis_url = redis_url
         self._seen_articles: Set[str] = set()
         self._pool: Optional[asyncpg.Pool] = None
+        self._tsdb: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
 
     @classmethod
@@ -88,11 +83,13 @@ class NewsConsumer:
             topic=os.getenv("KAFKA_TOPIC", "raw.news"),
             group_id=os.getenv("KAFKA_GROUP_ID", "news-consumer"),
             database_url=os.environ["DATABASE_URL"],
+            timescale_url=os.environ["TIMESCALE_URL"],
             redis_url=os.getenv("REDIS_URL", "redis://redis:6379"),
         )
 
     async def run(self) -> None:
         self._pool = await asyncpg.create_pool(self._database_url, min_size=1, max_size=5)
+        self._tsdb = await asyncpg.create_pool(self._timescale_url, min_size=1, max_size=3)
         self._redis = aioredis.from_url(self._redis_url)
 
         consumer = Consumer({
@@ -121,6 +118,8 @@ class NewsConsumer:
             consumer.close()
             if self._pool:
                 await self._pool.close()
+            if self._tsdb:
+                await self._tsdb.close()
             if self._redis:
                 await self._redis.aclose()
 
@@ -136,6 +135,32 @@ class NewsConsumer:
             self._seen_articles.add(article_id)
 
             signal_score, urgency, confidence_interval = _score_signal(article, now)
+
+            # Parse article timestamp for TimescaleDB write
+            article_ts = now
+            if article.get("published_at"):
+                try:
+                    article_ts = datetime.fromisoformat(article["published_at"])
+                    if article_ts.tzinfo is None:
+                        article_ts = article_ts.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
+
+            # Write every article to TimescaleDB (raw store, before signal gate)
+            try:
+                await self._tsdb.execute(
+                    """INSERT INTO raw_news (ts, article_id, symbol, headline,
+                                            sentiment_score, hotness, source)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING""",
+                    article_ts, article_id, ticker,
+                    article.get("headline", ""),
+                    None,        # sentiment_score (not available from Finnhub free tier)
+                    signal_score,
+                    article.get("source_name"),
+                )
+            except Exception as exc:
+                logger.warning("raw_news write failed: %s", exc)
+
             if signal_score < MIN_SIGNAL_SCORE:
                 continue
 
@@ -161,7 +186,7 @@ class NewsConsumer:
                 json.dumps({"signal_id": signal_id, "source": "news", "symbol": ticker}),
             )
             logger.info(
-                "News signal: %s score=%.3f urgency=%s ci=%s '%s'",
-                ticker, signal_score, urgency, confidence_interval,
+                "News signal: %s score=%.3f urgency=%s '%s'",
+                ticker, signal_score, urgency,
                 article.get("headline", "")[:50],
             )
