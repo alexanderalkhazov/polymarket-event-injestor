@@ -44,8 +44,9 @@ Thumbs.db
 models/*.json
 models/*.pkl
 
-./claude 
-/claude 
-claude*
+.claude/
 
 node_modules/
+
+# TypeScript build info
+*.tsbuildinfo
