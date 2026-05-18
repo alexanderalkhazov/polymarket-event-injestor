@@ -130,16 +130,60 @@ SELECT create_hypertable('features', 'ts');
 CREATE INDEX features_symbol    ON features (symbol, ts DESC);
 CREATE INDEX features_unlabeled ON features (ts) WHERE forward_return_5d IS NULL;
 
--- Compress features older than 7 days (~90% disk savings)
+-- ── Compression policies (applied to all symbol-keyed hypertables) ──────────
+
 ALTER TABLE features SET (
   timescaledb.compress,
   timescaledb.compress_segmentby = 'symbol'
 );
 SELECT add_compression_policy('features', INTERVAL '7 days');
 
--- Compress raw_ohlcv older than 7 days
 ALTER TABLE raw_ohlcv SET (
   timescaledb.compress,
   timescaledb.compress_segmentby = 'symbol'
 );
 SELECT add_compression_policy('raw_ohlcv', INTERVAL '7 days');
+
+ALTER TABLE technicals SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'symbol'
+);
+SELECT add_compression_policy('technicals', INTERVAL '7 days');
+
+ALTER TABLE raw_news SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'symbol'
+);
+SELECT add_compression_policy('raw_news', INTERVAL '3 days');
+
+ALTER TABLE raw_polymarket SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'market_id'
+);
+SELECT add_compression_policy('raw_polymarket', INTERVAL '3 days');
+
+ALTER TABLE raw_options SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'symbol'
+);
+SELECT add_compression_policy('raw_options', INTERVAL '3 days');
+
+ALTER TABLE raw_macro SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'series_id'
+);
+SELECT add_compression_policy('raw_macro', INTERVAL '7 days');
+
+-- ── Retention policies (drop chunks older than threshold) ────────────────────
+-- Raw source tables: short-lived, only used for feature computation
+SELECT add_retention_policy('raw_news',       INTERVAL '30 days');
+SELECT add_retention_policy('raw_polymarket', INTERVAL '30 days');
+SELECT add_retention_policy('raw_options',    INTERVAL '30 days');
+
+-- Feature store: 90 days is plenty for ML training windows
+SELECT add_retention_policy('features', INTERVAL '90 days');
+
+-- Long-lived reference data: 10 years for backtesting
+SELECT add_retention_policy('raw_ohlcv',   INTERVAL '10 years');
+SELECT add_retention_policy('raw_macro',   INTERVAL '10 years');
+SELECT add_retention_policy('technicals',  INTERVAL '10 years');

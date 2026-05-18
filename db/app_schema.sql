@@ -158,3 +158,55 @@ CREATE TABLE positions (
   realized_pnl NUMERIC,
   UNIQUE (user_id, symbol, is_paper)
 );
+
+-- ── Data lifecycle cleanup function ─────────────────────────────────────────
+-- Called nightly by the feature-builder service.
+-- Returns a JSON summary of rows deleted for observability.
+CREATE OR REPLACE FUNCTION cleanup_old_data() RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE
+  v_signals       INT;
+  v_backtests     INT;
+  v_opportunities INT;
+  v_strategies    INT;
+BEGIN
+  -- 1. Signals older than 30 days that never became part of an opportunity
+  DELETE FROM signals
+  WHERE created_at < NOW() - INTERVAL '30 days'
+    AND id NOT IN (
+      SELECT UNNEST(signal_ids) FROM opportunities
+    );
+  GET DIAGNOSTICS v_signals = ROW_COUNT;
+
+  -- 2. Dismissed / expired strategies older than 30 days
+  --    (executed strategies kept for 180 days for trade history)
+  DELETE FROM strategies
+  WHERE status IN ('dismissed', 'expired')
+    AND created_at < NOW() - INTERVAL '30 days';
+  GET DIAGNOSTICS v_strategies = ROW_COUNT;
+
+  -- 3. Backtest results older than 90 days not linked to any opportunity
+  DELETE FROM backtest_results
+  WHERE created_at < NOW() - INTERVAL '90 days'
+    AND id NOT IN (
+      SELECT backtest_id FROM opportunities WHERE backtest_id IS NOT NULL
+    );
+  GET DIAGNOSTICS v_backtests = ROW_COUNT;
+
+  -- 4. Opportunities older than 180 days with no executed trade behind them
+  DELETE FROM opportunities
+  WHERE created_at < NOW() - INTERVAL '180 days'
+    AND id NOT IN (
+      SELECT opportunity_id FROM strategies
+      WHERE status = 'executed'
+    );
+  GET DIAGNOSTICS v_opportunities = ROW_COUNT;
+
+  RETURN jsonb_build_object(
+    'signals_deleted',       v_signals,
+    'strategies_deleted',    v_strategies,
+    'backtests_deleted',     v_backtests,
+    'opportunities_deleted', v_opportunities,
+    'ran_at',                NOW()
+  );
+END;
+$$;

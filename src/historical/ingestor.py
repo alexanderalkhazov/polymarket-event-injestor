@@ -42,7 +42,7 @@ def _symbols() -> list[str]:
 
 def _lookback(backfill: bool) -> str:
     if backfill:
-        return "6mo" if os.getenv("DEV_MODE", "false").lower() == "true" else "2y"
+        return "6mo" if os.getenv("DEV_MODE", "false").lower() == "true" else "10y"
     return "5d"
 
 
@@ -148,7 +148,7 @@ async def ingest_macro(tsdb: asyncpg.Connection) -> None:
     fred = Fred(api_key=fred_key)
     for series_id, desc in FRED_SERIES.items():
         try:
-            data = fred.get_series(series_id, observation_start="2022-01-01")
+            data = fred.get_series(series_id, observation_start="2014-01-01")
             rows = [
                 (ts.to_pydatetime(), series_id, float(val))
                 for ts, val in data.items() if pd.notna(val)
@@ -164,13 +164,23 @@ async def ingest_macro(tsdb: asyncpg.Connection) -> None:
             logger.error("Macro ingest failed for %s: %s", series_id, exc)
 
 
+async def _is_fresh_db(conn: asyncpg.Connection) -> bool:
+    """Return True if raw_ohlcv is empty — indicates a clean volume, needs backfill."""
+    count = await conn.fetchval("SELECT COUNT(*) FROM raw_ohlcv")
+    return count == 0
+
+
 async def run_once(backfill: bool = False) -> None:
     timescale_url = os.environ["TIMESCALE_URL"]
     symbols = _symbols()
-    logger.info("Starting ingest: %d symbols, backfill=%s", len(symbols), backfill)
 
     conn = await asyncpg.connect(timescale_url)
     try:
+        if not backfill and await _is_fresh_db(conn):
+            logger.info("Empty DB detected — running 10-year backfill automatically")
+            backfill = True
+
+        logger.info("Starting ingest: %d symbols, backfill=%s", len(symbols), backfill)
         await ingest_ohlcv(symbols, conn, backfill)
         await ingest_macro(conn)
     finally:

@@ -11,6 +11,7 @@ import asyncpg
 
 from .builder import FeatureBuilder, get_symbols
 from .label_filler import fill_labels
+from .cleanup import run_cleanup
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ async def main_async(backfill: bool) -> None:
             ticks += 1
             if ticks % 24 == 0:
                 await fill_labels(pool)
+                await run_cleanup()
     finally:
         await pool.close()
 
