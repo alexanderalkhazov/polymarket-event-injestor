@@ -105,9 +105,10 @@ services:
 
   # ── Python producers ─────────────────────────────────────────────────────────
   polymarket-producer:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/event_detectors/polymarket_producer
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m event_detectors.polymarket_producer
     env_file: env/python.env
     depends_on:
       redpanda:
@@ -117,9 +118,10 @@ services:
     restart: unless-stopped
 
   news-producer:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/event_detectors/news_producer
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m event_detectors.news_producer
     env_file: env/python.env
     depends_on:
       redpanda:
@@ -129,9 +131,10 @@ services:
     restart: unless-stopped
 
   analytics-producer:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/event_detectors/analytics_producer
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m event_detectors.analytics_producer
     env_file: env/python.env
     depends_on:
       redpanda:
@@ -142,9 +145,10 @@ services:
 
   # ── Python consumers ─────────────────────────────────────────────────────────
   polymarket-consumer:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/event_processors/polymarket_consumer
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m event_processors.polymarket_consumer
     env_file: env/python.env
     depends_on:
       redpanda:
@@ -158,9 +162,10 @@ services:
     restart: unless-stopped
 
   news-consumer:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/event_processors/news_consumer
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m event_processors.news_consumer
     env_file: env/python.env
     depends_on:
       redpanda:
@@ -174,9 +179,10 @@ services:
     restart: unless-stopped
 
   analytics-consumer:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/event_processors/analytics_consumer
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m event_processors.analytics_consumer
     env_file: env/python.env
     depends_on:
       redpanda:
@@ -191,9 +197,10 @@ services:
 
   # ── Feature store (hourly snapshots + nightly label fill) ───────────────────
   feature-builder:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/feature_store
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m feature_store.scheduler
     env_file: env/python.env
     depends_on:
       postgres:
@@ -204,9 +211,10 @@ services:
 
   # ── Historical ingestor (nightly OHLCV + FRED macro) ────────────────────────
   historical-ingestor:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/historical
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m historical.ingestor
     env_file: env/python.env
     depends_on:
       timescale:
@@ -215,9 +223,10 @@ services:
 
   # ── AI correlator ────────────────────────────────────────────────────────────
   ai-correlator:
-    build: {context: ., dockerfile: Dockerfile}
+    build:
+      context: src/ai_correlator
+      dockerfile: Dockerfile
     platform: linux/arm64
-    command: python -m ai_correlator.__main__
     env_file: env/python.env
     volumes:
       - ./models:/app/models:ro

@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/src
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -10,12 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl ca-certificates netcat-openbsd && \
     rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
-COPY src ./src
-COPY scripts ./scripts
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-RUN pip install --upgrade pip && \
-    pip install . && \
-    pip install debugpy
+COPY . /app/news_producer/
 
-CMD ["python", "-m", "event_detectors.polymarket_producer"]
+CMD ["python", "-m", "news_producer"]

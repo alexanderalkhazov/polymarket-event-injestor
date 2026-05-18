@@ -32,7 +32,7 @@ from openai import OpenAI
 
 from .prompt import build_prompt
 from .fan_out import fan_out_to_users
-from event_detectors.polymarket_producer.sentiment import (
+from .polymarket_sentiment import (
     REDIS_KEY as POLY_SENTIMENT_KEY,
     filter_for_tickers,
 )
@@ -137,7 +137,7 @@ def _score(feat_dict: dict, direction: str = "up") -> tuple[float, list[dict]]:
         except Exception as exc:
             logger.warning("XGBoost scoring failed: %s — using rule scorer", exc)
 
-    from ml.rule_scorer import rule_based_score
+    from .rule_scorer import rule_based_score
     logger.debug("rule-based scorer active (direction=%s)", direction)
     return rule_based_score(feat_dict, direction=direction), []
 

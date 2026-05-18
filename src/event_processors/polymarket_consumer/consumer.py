@@ -15,7 +15,7 @@ import asyncpg
 import redis.asyncio as aioredis
 from confluent_kafka import Consumer, KafkaError
 
-from event_detectors.polymarket_producer.sentiment import CATEGORIES as SENTIMENT_CATEGORIES
+from .polymarket_sentiment import CATEGORIES as SENTIMENT_CATEGORIES
 
 # Build a quick keyword→tickers lookup from shared sentiment definitions
 _KEYWORD_TICKERS: list[tuple[str, list[str]]] = []
