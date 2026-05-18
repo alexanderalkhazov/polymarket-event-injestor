@@ -2,6 +2,18 @@ import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { getAlpaca } from "@/lib/alpaca"
 
+const MAX_POSITIONS       = parseInt(process.env.MAX_POSITIONS       ?? "5")
+const DAILY_LOSS_LIMIT    = parseFloat(process.env.DAILY_LOSS_LIMIT  ?? "0.03")
+
+function isMarketOpen(): boolean {
+  const now = new Date()
+  const et  = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }))
+  const day = et.getDay() // 0=Sun 6=Sat
+  if (day === 0 || day === 6) return false
+  const mins = et.getHours() * 60 + et.getMinutes()
+  return mins >= 9 * 60 + 30 && mins < 16 * 60
+}
+
 export async function POST(req: Request) {
   const session = await auth()
   if (!session?.user) return Response.json({ error: "unauthorized" }, { status: 401 })
@@ -59,9 +71,27 @@ export async function POST(req: Request) {
   if (!user.alpaca_key_id || !user.alpaca_secret)
     return Response.json({ error: "Alpaca account not connected — add your API keys in Settings" }, { status: 422 })
 
+  // Market hours — paper accounts can trade anytime; live accounts are gated
+  if (!user.is_paper && !isMarketOpen())
+    return Response.json({ error: "Market is closed. Orders can only be placed 9:30 AM – 4:00 PM ET, Mon–Fri." }, { status: 422 })
+
   const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
   const account = await alpaca.getAccount()
   const equity = parseFloat(account.equity)
+
+  // Portfolio risk: max concurrent positions
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const openPositions = await (alpaca as any).getPositions().catch(() => []) as any[]
+  if (openPositions.length >= MAX_POSITIONS)
+    return Response.json({ error: `Max ${MAX_POSITIONS} concurrent positions reached. Close a position before adding a new one.` }, { status: 422 })
+
+  // Portfolio risk: daily loss limit
+  const lastEquity = parseFloat(account.last_equity ?? account.equity)
+  if (lastEquity > 0) {
+    const dailyReturn = (equity - lastEquity) / lastEquity
+    if (dailyReturn <= -DAILY_LOSS_LIMIT)
+      return Response.json({ error: `Daily loss limit reached (${(dailyReturn * 100).toFixed(1)}% today). Trading paused to protect capital.` }, { status: 422 })
+  }
   const sizing = strat.sizing_usd ?? equity * strat.sizing_pct
   const symbol = strat.tickers[0]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -135,15 +165,23 @@ export async function GET(req: Request) {
     const userRes = await db.query("SELECT * FROM users WHERE id=$1", [userId])
     const user = userRes.rows[0]
     if (!user?.alpaca_key_id || !user?.alpaca_secret)
-      return Response.json({ price: null, symbol })
+      return Response.json({ price: null, atr: null, symbol })
     try {
+      const { tsdb } = await import("@/lib/tsdb")
       const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const quote = await alpaca.getLatestQuote(symbol) as any
-      const price = parseFloat(quote.ap ?? quote.AskPrice ?? quote.ask_price ?? "0") || null
-      return Response.json({ price, symbol })
+      const [quote, atrRow] = await Promise.allSettled([
+        alpaca.getLatestQuote(symbol) as Promise<unknown>,
+        tsdb.query("SELECT atr_14 FROM features WHERE symbol=$1 ORDER BY ts DESC LIMIT 1", [symbol]),
+      ])
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const q = quote.status === "fulfilled" ? (quote.value as any) : null
+      const price = q ? parseFloat(q.ap ?? q.AskPrice ?? q.ask_price ?? "0") || null : null
+      const atrVal = atrRow.status === "fulfilled" ? atrRow.value.rows[0]?.atr_14 : null
+      const atr = atrVal ? parseFloat(atrVal) : null
+      return Response.json({ price, atr, symbol })
     } catch {
-      return Response.json({ price: null, symbol })
+      return Response.json({ price: null, atr: null, symbol })
     }
   }
 

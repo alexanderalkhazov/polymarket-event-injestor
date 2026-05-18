@@ -4,6 +4,7 @@ import type { Strategy } from "@/hooks/useStrategyStream"
 
 interface StrategyCardProps {
   strategy: Strategy
+  assetNames?: Record<string, string>
   selected: boolean
   onClick: () => void
 }
@@ -18,7 +19,7 @@ function relTime(iso: string) {
   return `${Math.floor(h / 24)}d ago`
 }
 
-export function StrategyCard({ strategy: s, selected, onClick }: StrategyCardProps) {
+export function StrategyCard({ strategy: s, assetNames = {}, selected, onClick }: StrategyCardProps) {
   const action = s.action ?? "buy"
   const accentColor =
     action === "buy" ? "var(--green)" : action === "sell" ? "var(--red)" : "var(--amber)"
@@ -39,6 +40,11 @@ export function StrategyCard({ strategy: s, selected, onClick }: StrategyCardPro
 
   const faded = isExpired || isDismissed
 
+  const primaryTicker = (s.tickers ?? [])[0] ?? ""
+  const relatedTickers = (s.tickers ?? []).slice(1)
+  const primaryName = assetNames[primaryTicker]
+  const showName = !!(primaryName && primaryName !== primaryTicker)
+
   return (
     <div
       onClick={onClick}
@@ -56,15 +62,24 @@ export function StrategyCard({ strategy: s, selected, onClick }: StrategyCardPro
         transition: "box-shadow 0.12s, border-color 0.12s, opacity 0.12s",
       }}
     >
-      {/* Row 1: Ticker + action badge + status */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+      {/* Row 1: Ticker + name + action badge + status */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <span style={{
-          fontFamily: "var(--font-dm-mono)", fontSize: 15, fontWeight: 600,
-          color: "var(--text)", flex: 1,
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          fontFamily: "var(--font-dm-mono)", fontSize: 15, fontWeight: 700,
+          color: "var(--text)", flexShrink: 0,
         }}>
-          {(s.tickers ?? []).join(" / ") || "—"}
+          {primaryTicker || "—"}
         </span>
+        {showName && (
+          <span style={{
+            fontSize: 12, color: "var(--muted)", fontWeight: 400,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            flex: 1,
+          }}>
+            {primaryName}
+          </span>
+        )}
+        {!showName && <div style={{ flex: 1 }} />}
         <span style={{
           background: accentBg, color: accentColor,
           borderRadius: 5, padding: "2px 7px",
@@ -85,6 +100,23 @@ export function StrategyCard({ strategy: s, selected, onClick }: StrategyCardPro
           </span>
         )}
       </div>
+
+      {/* Related tickers */}
+      {relatedTickers.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10, color: "var(--dim)" }}>signal from</span>
+          {relatedTickers.map((t) => (
+            <span key={t} style={{
+              fontFamily: "var(--font-dm-mono)", fontSize: 10,
+              color: "var(--dim)", background: "var(--bg2)",
+              border: "1px solid var(--border)", borderRadius: 4,
+              padding: "1px 5px",
+            }}>
+              {t}{assetNames[t] && assetNames[t] !== t ? ` · ${assetNames[t]}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Summary */}
       <p style={{

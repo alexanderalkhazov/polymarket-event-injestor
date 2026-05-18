@@ -221,6 +221,20 @@ services:
         condition: service_healthy
     restart: on-failure
 
+  # ── ML model retrainer (hourly check, retrains when MIN_TRAIN_SAMPLES reached) ─
+  ml-trainer:
+    build:
+      context: src/ml
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      timescale:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── AI correlator ────────────────────────────────────────────────────────────
   ai-correlator:
     build:
@@ -240,18 +254,18 @@ services:
     restart: unless-stopped
 
   # ── Frontend (Next.js App Router — UI + BFF in one) ─────────────────────────
-  nextjs:
-    build: {context: src/web, dockerfile: Dockerfile}
-    platform: linux/arm64
-    ports:
-      - "3000:3000"
-    env_file: env/nextjs.env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+  # nextjs:
+  #   build: {context: src/web, dockerfile: Dockerfile}
+  #   platform: linux/arm64
+  #   ports:
+  #     - "3000:3000"
+  #   env_file: env/nextjs.env
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
 volumes:
   redpanda-data:

@@ -7,4 +7,5 @@ shap>=0.44
 scikit-learn>=1.4
 pandas>=2.2
 numpy>=1.26
+yfinance>=0.2.40
 python-dotenv>=1.0.0

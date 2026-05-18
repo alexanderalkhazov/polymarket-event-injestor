@@ -45,7 +45,7 @@ FEATURE_COLS = [
     "bb_position", "sma_20_slope", "vol_ratio_30d",
     "price_change_1d", "price_change_5d", "put_call_ratio",
     "unusual_sweep_count_4h", "vix_level", "wti_crude",
-    "us_10y_yield", "fed_funds_rate", "usd_index", "social_sentiment_z",
+    "us_10y_yield", "fed_funds_rate", "usd_index",
 ]
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "models"))

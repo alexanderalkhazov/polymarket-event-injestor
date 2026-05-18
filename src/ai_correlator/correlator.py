@@ -20,10 +20,12 @@ import json
 import logging
 import os
 import pickle
+import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import anthropic
 import asyncpg
@@ -53,8 +55,12 @@ FEATURE_COLS = [
     "bb_position", "sma_20_slope", "vol_ratio_30d",
     "price_change_1d", "price_change_5d", "put_call_ratio",
     "unusual_sweep_count_4h", "vix_level", "wti_crude",
-    "us_10y_yield", "fed_funds_rate", "usd_index", "social_sentiment_z",
+    "us_10y_yield", "fed_funds_rate", "usd_index",
 ]
+
+_ET = ZoneInfo("America/New_York")
+MAX_POSITIONS       = int(os.getenv("MAX_POSITIONS", "5"))
+EARNINGS_GUARD_DAYS = int(os.getenv("EARNINGS_GUARD_DAYS", "3"))
 
 _claude:         Optional[anthropic.Anthropic] = None
 _oai:            Optional[OpenAI] = None
@@ -62,6 +68,7 @@ _model           = None   # long/buy model
 _model_short     = None   # short/sell model
 _explainer       = None
 _explainer_short = None
+_model_mtime:    float = 0.0
 
 
 def _get_claude() -> anthropic.Anthropic:
@@ -107,6 +114,55 @@ def _load_model() -> bool:
 
 
 _use_xgboost = _load_model()
+
+
+def _maybe_reload_model() -> None:
+    """Reload model files if they have been updated on disk (e.g., after retraining)."""
+    global _use_xgboost, _model_mtime
+    if not MODEL_PATH.exists():
+        return
+    try:
+        mtime = MODEL_PATH.stat().st_mtime
+        if mtime > _model_mtime:
+            logger.info("Model file updated on disk — reloading...")
+            _use_xgboost = _load_model()
+            _model_mtime = mtime
+    except Exception as exc:
+        logger.warning("Model reload check failed: %s", exc)
+
+
+def _is_market_open() -> bool:
+    """True if NYSE/NASDAQ is currently open (9:30–16:00 ET, Mon–Fri)."""
+    now = datetime.now(_ET)
+    if now.weekday() >= 5:
+        return False
+    total_min = now.hour * 60 + now.minute
+    return 9 * 60 + 30 <= total_min < 16 * 60
+
+
+def _is_near_earnings(symbol: str) -> bool:
+    """Return True if symbol reports earnings within EARNINGS_GUARD_DAYS calendar days."""
+    try:
+        import yfinance as yf
+        cal = yf.Ticker(symbol).calendar
+        if cal is None:
+            return False
+        # yfinance >= 0.2 returns a dict
+        if isinstance(cal, dict):
+            dates = cal.get("Earnings Date", [])
+            if not dates:
+                return False
+            ed = dates[0] if isinstance(dates, list) else dates
+            ed = ed.date() if hasattr(ed, "date") else ed
+            return 0 <= (ed - date.today()).days <= EARNINGS_GUARD_DAYS
+        # older versions return a DataFrame
+        if hasattr(cal, "columns") and "Earnings Date" in cal.columns:
+            from datetime import datetime as dt
+            ed = dt.fromisoformat(str(cal["Earnings Date"].iloc[0])).date()
+            return 0 <= (ed - date.today()).days <= EARNINGS_GUARD_DAYS
+    except Exception:
+        pass
+    return False
 
 
 def _score(feat_dict: dict, direction: str = "up") -> tuple[float, list[dict]]:
@@ -218,77 +274,42 @@ def _conditions_met(feat_dict: dict, conditions: dict) -> bool:
     return True
 
 
-async def _run_backtest(hypothesis: dict, symbol: str, tsdb: asyncpg.Pool, db: asyncpg.Pool) -> dict:
-    """Minimal backtest against the features table. Returns stats dict with 'passed' key."""
-    conditions: dict = hypothesis.get("feature_conditions") or {}
-    if isinstance(conditions, str):
-        conditions = json.loads(conditions)
+async def _run_backtest(signal: dict, hypothesis: dict, symbol: str, tsdb: asyncpg.Pool, db: asyncpg.Pool) -> dict:
+    """Run SignalBacktester against OHLCV history. Returns stats dict with 'passed' key."""
+    from .backtester import SignalBacktester
+    bt = await SignalBacktester(tsdb).estimate([signal])
 
-    hold_days = hypothesis.get("hold_days", 5)
+    n  = bt["sample_size"]
+    wr = bt["win_rate"]
+    # Lenient early on — tighten as labeled data grows
+    if n < 10:
+        passed, drop_reason = True, None
+    else:
+        passed = wr >= 0.45
+        drop_reason = f"win_rate={wr:.2f} < 0.45" if not passed else None
 
-    # Query labeled feature rows where this hypothesis would have fired
-    rows = await tsdb.fetch(
-        """SELECT forward_return_5d FROM features
-           WHERE symbol=$1 AND forward_return_5d IS NOT NULL
-           ORDER BY ts ASC""",
-        symbol,
-    )
-
-    returns = [float(r["forward_return_5d"]) for r in rows if r["forward_return_5d"] is not None]
-
-    if len(returns) < 5:
-        # Not enough data yet — use stub that passes to not block the pipeline
-        return {
-            "id": None,
-            "sample_size": 0,
-            "win_rate": 0.0,
-            "avg_return_pct": 0.0,
-            "median_return_pct": 0.0,
-            "sharpe": None,
-            "max_drawdown_pct": None,
-            "expectancy": 0.0,
-            "passed": True,
-            "drop_reason": None,
-        }
-
-    wins = [r for r in returns if r > 0.03]
-    win_rate = len(wins) / len(returns)
-    avg_ret = sum(returns) / len(returns) * 100
-    import statistics
-    med_ret = statistics.median(returns) * 100
-    expectancy = win_rate * (sum(wins) / len(wins) if wins else 0) * 100
-    passed = win_rate >= 0.55 and len(returns) >= 30
-
-    saved = await db.fetchrow(
+    saved_id = await db.fetchval(
         """INSERT INTO backtest_results
            (hypothesis_id, signal_ids, strategy_name, symbol, sample_size, win_rate,
-            avg_return_pct, median_return_pct, expectancy, passed, drop_reason)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id""",
+            avg_return_pct, median_return_pct, sharpe, max_drawdown_pct, expectancy,
+            passed, drop_reason)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id""",
         hypothesis.get("id"),
         [],
-        hypothesis.get("name", "unknown"),
+        bt.get("strategy_name", "multi"),
         symbol,
-        len(returns),
-        win_rate,
-        avg_ret,
-        med_ret,
-        expectancy,
+        n,
+        wr,
+        bt.get("avg_return_pct", 0.0),
+        bt.get("median_return_pct", 0.0),
+        bt.get("sharpe"),
+        bt.get("max_drawdown_pct"),
+        bt.get("expectancy", 0.0),
         passed,
-        None if passed else f"win_rate={win_rate:.2f} < 0.55 or n={len(returns)} < 30",
+        drop_reason,
     )
 
-    return {
-        "id": saved["id"],
-        "sample_size": len(returns),
-        "win_rate": win_rate,
-        "avg_return_pct": avg_ret,
-        "median_return_pct": med_ret,
-        "sharpe": None,
-        "max_drawdown_pct": None,
-        "expectancy": expectancy,
-        "passed": passed,
-        "drop_reason": None if passed else f"win_rate={win_rate:.2f} or n={len(returns)} too small",
-    }
+    return {**bt, "passed": passed, "id": saved_id, "drop_reason": drop_reason}
 
 
 async def _get_polymarket_sentiment(tickers: list[str], redis) -> dict:
@@ -352,6 +373,8 @@ async def run() -> None:
 
 
 async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) -> None:
+    _maybe_reload_model()
+
     # 1. Fetch signal
     signal = await db.fetchrow("SELECT * FROM signals WHERE id=$1", uuid.UUID(signal_id))
     if not signal:
@@ -381,9 +404,24 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         confidence, top_features = _score(feat_dict, direction=sig_direction)
     logger.info("Signal %s: symbol=%s source=%s confidence=%.3f", signal_id[:8], symbol, signal["source"], confidence)
 
-    # 4. Gate
+    # 4. Gate: confidence
     if confidence < CONFIDENCE_THRESHOLD:
         logger.debug("Confidence %.3f below threshold — dropping", confidence)
+        return
+
+    # 4.5. Symbol dedup — skip if an opportunity was created for this symbol in the last 15 min
+    if signal["source"] != "polymarket":
+        recent = await db.fetchrow(
+            "SELECT id FROM opportunities WHERE $1 = ANY(tickers) AND created_at > NOW()-INTERVAL '15 minutes' LIMIT 1",
+            symbol,
+        )
+        if recent:
+            logger.debug("Dedup: opportunity for %s in last 15 min — skipping", symbol)
+            return
+
+    # 4.6. Earnings guard — skip if earnings are within EARNINGS_GUARD_DAYS calendar days
+    if signal["source"] != "polymarket" and _is_near_earnings(symbol):
+        logger.info("Earnings within %d days for %s — skipping to avoid event risk", EARNINGS_GUARD_DAYS, symbol)
         return
 
     # 5. Match hypothesis
@@ -393,7 +431,7 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         return
 
     # 6. Backtest
-    bt = await _run_backtest(hypothesis, symbol, tsdb, db)
+    bt = await _run_backtest(signal, hypothesis, symbol, tsdb, db)
     if not bt["passed"]:
         logger.info("Backtest failed for %s: %s", symbol, bt.get("drop_reason"))
         return
@@ -481,15 +519,6 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     else:
         tickers = [symbol]
 
-    # Deduplicate: skip if we already created an opportunity for this symbol in the last 4h
-    recent = await db.fetchrow(
-        "SELECT id FROM opportunities WHERE tickers @> $1 AND created_at > NOW()-INTERVAL '4 hours' LIMIT 1",
-        tickers,
-    )
-    if recent:
-        logger.debug("Dedup: opportunity for %s already exists in last 4h — skipping", tickers)
-        return
-
     saved = await db.fetchrow(
         """INSERT INTO opportunities
            (hypothesis_id, signal_ids, backtest_id, model_confidence,
@@ -519,7 +548,10 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     opp["win_rate"] = bt["win_rate"]
     opp["backtest_sample_size"] = bt["sample_size"]
 
-    # 12. Fan-out
+    # 12. Fan-out — only during market hours (order execution requires open market)
+    if not _is_market_open():
+        logger.info("Market closed — opportunity saved but not fanned out (symbol=%s)", symbol)
+        return
     await fan_out_to_users(opp, db, redis)
     logger.info(
         "Opportunity created: conf=%.2f action=%s symbol=%s hypothesis=%s",

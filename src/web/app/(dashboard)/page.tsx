@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useStrategyStream } from "@/hooks/useStrategyStream"
+import { useAssetNames } from "@/hooks/useAssetNames"
 import { StrategyCard } from "@/components/strategy/StrategyCard"
 import { StrategyDetail } from "@/components/strategy/StrategyDetail"
 import { Topbar } from "@/components/layout/Topbar"
@@ -19,8 +20,19 @@ const FILTERS: { key: Filter; label: string }[] = [
 
 export default function StrategyInboxPage() {
   const { strategies, loaded } = useStrategyStream()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [filter, setFilter]         = useState<Filter>("all")
+  const allTickers = useMemo(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const s of strategies) {
+      for (const t of s.tickers ?? []) {
+        if (!seen.has(t)) { seen.add(t); result.push(t) }
+      }
+    }
+    return result
+  }, [strategies])
+  const assetNames = useAssetNames(allTickers)
+  const [selectedId, setSelectedId]     = useState<string | null>(null)
+  const [filter, setFilter]             = useState<Filter>("all")
   const [localStatuses, setLocalStatuses] = useState<Record<string, string>>({})
 
   const merged = useMemo(
@@ -36,12 +48,18 @@ export default function StrategyInboxPage() {
     return merged.filter((s) => s.status === filter)
   }, [merged, filter])
 
-  const handleSelect  = (id: string) => setSelectedId((prev) => (prev === id ? null : id))
+  // Lock body scroll when modal is open
+  useEffect(() => {
+    document.body.style.overflow = selected ? "hidden" : ""
+    return () => { document.body.style.overflow = "" }
+  }, [!!selected])
+
+  const handleSelect  = (id: string) => setSelectedId(id)
   const close         = () => setSelectedId(null)
 
-  const handleDismiss  = () => { if (selectedId) { setLocalStatuses((p) => ({ ...p, [selectedId]: "dismissed" })); setSelectedId(null) } }
-  const handleRestore  = () => { if (selectedId) { setLocalStatuses((p) => ({ ...p, [selectedId]: "pending" })) } }
-  const handleExecuted = () => { if (selectedId) { setLocalStatuses((p) => ({ ...p, [selectedId]: "executed" })); setSelectedId(null) } }
+  const handleDismiss  = () => { if (selectedId) { setLocalStatuses((p) => ({ ...p, [selectedId]: "dismissed" })); close() } }
+  const handleRestore  = () => { if (selectedId) setLocalStatuses((p) => ({ ...p, [selectedId]: "pending" })) }
+  const handleExecuted = () => { if (selectedId) { setLocalStatuses((p) => ({ ...p, [selectedId]: "executed" })); close() } }
 
   const pendingCount = merged.filter((s) => s.status === "pending").length
 
@@ -64,7 +82,6 @@ export default function StrategyInboxPage() {
             f.key === "all"     ? merged.length
             : f.key === "dropped" ? merged.filter((s) => s.status === "expired").length
             : merged.filter((s) => s.status === f.key).length
-
           const isActive = filter === f.key
           return (
             <button
@@ -97,77 +114,78 @@ export default function StrategyInboxPage() {
         })}
       </div>
 
-      {/* Main split */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-
-        {/* Card list */}
-        <div style={{
-          width: selected ? 400 : "100%",
-          flexShrink: 0,
-          overflowY: "auto",
-          padding: "14px 14px",
-          display: "flex", flexDirection: "column", gap: 10,
-          transition: "width 0.18s cubic-bezier(0.4,0,0.2,1)",
-          borderRight: selected ? "1px solid var(--border)" : "none",
-        }}>
-          {/* Loading skeletons */}
-          {!loaded && strategies.length === 0 && (
-            <>
-              <Skeleton height={128} />
-              <Skeleton height={128} />
-              <Skeleton height={100} />
-            </>
-          )}
-
-          {/* Empty state */}
-          {loaded && strategies.length === 0 && (
-            <div style={{
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              height: 320, gap: 12, color: "var(--muted)",
-            }}>
-              <div style={{ fontSize: 36, opacity: 0.2 }}>◎</div>
-              <div style={{ fontSize: 14, fontWeight: 500 }}>Waiting for strategies</div>
-              <div style={{ fontSize: 12, color: "var(--dim)", textAlign: "center", maxWidth: 240, lineHeight: 1.6 }}>
-                The correlator will surface opportunities when signals align.
-              </div>
+      {/* Card list — always full width */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "14px 14px" }}>
+        {!loaded && strategies.length === 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Skeleton height={128} />
+            <Skeleton height={128} />
+            <Skeleton height={100} />
+          </div>
+        )}
+        {loaded && strategies.length === 0 && (
+          <div style={{
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            height: 320, gap: 12, color: "var(--muted)",
+          }}>
+            <div style={{ fontSize: 36, opacity: 0.2 }}>◎</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>Waiting for strategies</div>
+            <div style={{ fontSize: 12, color: "var(--dim)", textAlign: "center", maxWidth: 240, lineHeight: 1.6 }}>
+              The correlator will surface opportunities when signals align.
             </div>
-          )}
-
-          {/* Cards */}
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 680, margin: "0 auto" }}>
           {filtered.map((s) => (
             <StrategyCard
               key={s.id}
               strategy={s}
+              assetNames={assetNames}
               selected={selectedId === s.id}
               onClick={() => handleSelect(s.id)}
             />
           ))}
-
-          {filtered.length === 0 && strategies.length > 0 && (
-            <div style={{
-              textAlign: "center", paddingTop: 48,
-              fontSize: 13, color: "var(--dim)",
-            }}>
-              No strategies match this filter.
-            </div>
-          )}
         </div>
+        {filtered.length === 0 && strategies.length > 0 && (
+          <div style={{ textAlign: "center", paddingTop: 48, fontSize: 13, color: "var(--dim)" }}>
+            No strategies match this filter.
+          </div>
+        )}
+      </div>
 
-        {/* Detail panel */}
-        {selected && (
-          <div style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
+      {/* Modal overlay */}
+      {selected && (
+        <>
+          {/* Backdrop */}
+          <div
+            onClick={close}
+            style={{
+              position: "fixed", inset: 0, zIndex: 50,
+              background: "rgba(0,0,0,0.6)",
+              backdropFilter: "blur(3px)",
+              WebkitBackdropFilter: "blur(3px)",
+            }}
+          />
+          {/* Modal */}
+          <div style={{
+            position: "fixed", zIndex: 51,
+            top: "50%", left: "50%",
+            transform: "translate(-50%, -50%)",
+            width: "min(780px, calc(100vw - 32px))",
+          }}>
             <StrategyDetail
               key={selected.id}
               strategy={selected}
+              assetNames={assetNames}
               onClose={close}
               onDismiss={handleDismiss}
               onExecuted={handleExecuted}
               onRestore={handleRestore}
             />
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   )
 }

@@ -1,20 +1,13 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Skeleton } from "@/components/ui/Skeleton"
-import { BacktestStats } from "@/components/strategy/BacktestStats"
-import { SignalList } from "@/components/strategy/SignalList"
-import { MacroGrid } from "@/components/strategy/MacroGrid"
 import { OrderEntry } from "@/components/strategy/OrderEntry"
 import { showToast } from "@/components/ui/Toast"
 import type { Strategy } from "@/hooks/useStrategyStream"
 
-interface Signal { id: string; source: string; type: string; symbol: string; score: number }
-interface MacroRow { series_id: string; value: number }
-
 interface DetailData {
-  signals: Signal[]
-  macro: MacroRow[]
+  signals: unknown[]
+  macro: unknown[]
   win_rate: number | null
   avg_return_pct: number | null
   max_drawdown_pct: number | null
@@ -29,45 +22,84 @@ interface DetailData {
 
 interface StrategyDetailProps {
   strategy: Strategy
+  assetNames?: Record<string, string>
   onClose: () => void
   onDismiss: () => void
   onExecuted: () => void
   onRestore: () => void
 }
 
-function Divider() {
-  return <div style={{ height: 1, background: "var(--border)", margin: "0 -20px" }} />
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Stat({
+  label, value, color, hint, tooltip,
+}: {
+  label: string
+  value: string
+  color?: string
+  hint?: string
+  tooltip?: string
+}) {
   return (
-    <div style={{ padding: "18px 20px" }}>
+    <div
+      title={tooltip}
+      style={{ display: "flex", flexDirection: "column", gap: 2, cursor: tooltip ? "help" : undefined }}
+    >
       <div style={{
-        fontSize: 10, fontWeight: 700, textTransform: "uppercase",
-        letterSpacing: "0.1em", color: "var(--dim)", marginBottom: 12,
+        fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+        letterSpacing: "0.1em", color: "var(--dim)",
+        display: "flex", alignItems: "center", gap: 4,
       }}>
-        {title}
+        {label}
+        {tooltip && (
+          <span style={{ fontSize: 9, color: "var(--dim)", opacity: 0.6 }}>?</span>
+        )}
       </div>
-      {children}
+      <div style={{
+        fontFamily: "var(--font-dm-mono)", fontSize: 15, fontWeight: 700,
+        color: color ?? "var(--text)",
+      }}>
+        {value}
+      </div>
+      {hint && (
+        <div style={{ fontSize: 10, color: "var(--dim)", lineHeight: 1.3, marginTop: 1 }}>
+          {hint}
+        </div>
+      )}
     </div>
   )
 }
 
-export function StrategyDetail({ strategy: s, onClose, onDismiss, onExecuted, onRestore }: StrategyDetailProps) {
+export function StrategyDetail({ strategy: s, assetNames = {}, onClose, onDismiss, onExecuted, onRestore }: StrategyDetailProps) {
   const [detail, setDetail]   = useState<DetailData | null>(null)
-  const [loading, setLoading] = useState(true)
   const [restoring, setRestoring] = useState(false)
 
   useEffect(() => {
     if (!s?.id) return
-    setLoading(true)
     setDetail(null)
     fetch(`/api/strategies?id=${s.id}`)
       .then((r) => r.json())
       .then((data) => { if (data && !data.error) setDetail(data) })
       .catch(() => {})
-      .finally(() => setLoading(false))
   }, [s?.id])
+
+  if (!s) return null
+
+  const action      = s.action ?? "buy"
+  const tickers     = s.tickers ?? []
+  const confidence  = Math.round((s.confidence ?? 0) * 100)
+  const isPending   = s.status === "pending"
+  const isDismissed = s.status === "dismissed"
+  const isExecuted  = s.status === "executed"
+
+  const accentColor = action === "buy" ? "var(--green)" : action === "sell" ? "var(--red)" : "var(--amber)"
+  const accentBg    = action === "buy" ? "var(--green-bg)" : action === "sell" ? "var(--red-bg)" : "var(--amber-bg)"
+
+  const winRate  = detail?.win_rate  ?? null
+  const sample   = detail?.sample_size ?? null
+  const avgRet   = detail?.avg_return_pct ?? s.expected_return_pct ?? null
+  const sharpe   = detail?.sharpe ?? null
+  const holdDays = detail?.hold_days ?? s.hold_days ?? null
+  const riskNote = detail?.risk_note ?? null
+  const thesis   = s.thesis ?? s.summary ?? ""
 
   const handleRestore = async () => {
     setRestoring(true)
@@ -86,224 +118,197 @@ export function StrategyDetail({ strategy: s, onClose, onDismiss, onExecuted, on
     }
   }
 
-  if (!s) return null
-
-  const action      = s.action ?? "buy"
-  const tickers     = s.tickers ?? []
-  const confidence  = Math.round((s.confidence ?? 0) * 100)
-  const isPending   = s.status === "pending"
-  const isDismissed = s.status === "dismissed"
-  const isExecuted  = s.status === "executed"
-
-  const accentColor =
-    action === "buy" ? "var(--green)" : action === "sell" ? "var(--red)" : "var(--amber)"
-  const accentBg =
-    action === "buy" ? "var(--green-bg)" : action === "sell" ? "var(--red-bg)" : "var(--amber-bg)"
-
-  const holdDays = detail?.hold_days ?? s.hold_days ?? null
-  const stopLoss = detail?.stop_loss_pct ?? s.stop_loss_pct ?? null
-  const expRet   = detail?.expected_return_pct ?? s.expected_return_pct ?? null
-  const thesis   = s.thesis ?? s.summary ?? ""
-
   return (
     <div style={{
-      display: "flex", flexDirection: "column", height: "100%",
-      background: "var(--bg1)", borderLeft: "1px solid var(--border)",
+      background: "var(--bg1)",
+      borderRadius: 18,
+      border: "1px solid var(--border)",
+      boxShadow: "0 24px 80px rgba(0,0,0,0.5), 0 8px 32px rgba(0,0,0,0.3)",
+      overflow: "hidden",
     }}>
-      {/* ─── Header ─── */}
+
+      {/* ── Header ──────────────────────────────────────────────── */}
       <div style={{
-        padding: "16px 20px 0", flexShrink: 0,
-        background: "var(--bg1)",
+        padding: "16px 20px 12px",
+        background: "var(--bg2)",
+        borderBottom: "1px solid var(--border)",
       }}>
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 12 }}>
-          {/* Ticker */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          {/* Primary ticker + name + action badge */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              fontFamily: "var(--font-dm-mono)", fontSize: 20, fontWeight: 700,
-              color: "var(--text)", letterSpacing: "-0.01em",
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            }}>
-              {tickers.join(" / ") || "—"}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5, flexWrap: "wrap" }}>
+            {/* Ticker row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
+              <span style={{
+                fontFamily: "var(--font-dm-mono)", fontSize: 22, fontWeight: 700,
+                color: "var(--text)", letterSpacing: "-0.02em", flexShrink: 0,
+              }}>
+                {tickers[0] || "—"}
+              </span>
               <span style={{
                 background: accentBg, color: accentColor,
-                borderRadius: 5, padding: "2px 8px",
+                borderRadius: 6, padding: "3px 9px",
                 fontSize: 11, fontWeight: 700,
-                fontFamily: "var(--font-dm-mono)", letterSpacing: "0.06em",
+                fontFamily: "var(--font-dm-mono)", letterSpacing: "0.07em",
+                flexShrink: 0,
               }}>
                 {action.toUpperCase()}
               </span>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                {confidence}% confidence
-              </span>
               {isExecuted && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700, color: "var(--green)",
-                  letterSpacing: "0.06em",
-                }}>
-                  ✓ EXECUTED
-                </span>
+                <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 700 }}>✓ EXECUTED</span>
               )}
               {isDismissed && (
-                <span style={{ fontSize: 10, fontWeight: 600, color: "var(--dim)", letterSpacing: "0.06em" }}>
-                  DISMISSED
-                </span>
+                <span style={{ fontSize: 11, color: "var(--dim)", fontWeight: 600 }}>DISMISSED</span>
               )}
             </div>
+            {/* Full name */}
+            {(() => {
+              const name = assetNames[tickers[0]]
+              return name && name !== tickers[0] ? (
+                <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400, marginBottom: tickers.length > 1 ? 4 : 0 }}>
+                  {name}
+                </div>
+              ) : null
+            })()}
+            {/* Related tickers */}
+            {tickers.length > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10, color: "var(--dim)" }}>signal from</span>
+                {tickers.slice(1).map((t) => (
+                  <span key={t} style={{
+                    fontFamily: "var(--font-dm-mono)", fontSize: 10,
+                    color: "var(--dim)", background: "var(--bg0)",
+                    border: "1px solid var(--border)", borderRadius: 4,
+                    padding: "1px 5px",
+                  }}>
+                    {t}{assetNames[t] && assetNames[t] !== t ? ` · ${assetNames[t]}` : ""}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
-          {/* Close */}
-          <button
-            onClick={onClose}
-            style={{
-              background: "var(--bg3)", border: "none", borderRadius: 8,
-              width: 30, height: 30, cursor: "pointer",
-              color: "var(--muted)", fontSize: 14, lineHeight: 1,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              flexShrink: 0, transition: "background 0.1s",
-            }}
-          >
-            ✕
-          </button>
+
+          {/* Confidence + close */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <div
+              title="How strongly the AI model rates this setup. Above 80% is high conviction."
+              style={{ textAlign: "right", cursor: "help" }}
+            >
+              <div style={{ fontSize: 9, color: "var(--dim)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>
+                AI Confidence
+              </div>
+              <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 16, fontWeight: 700, color: accentColor }}>
+                {confidence}%
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              style={{
+                background: "var(--bg3)", border: "1px solid var(--border)",
+                borderRadius: 8, width: 30, height: 30,
+                cursor: "pointer", color: "var(--muted)", fontSize: 14,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "background 0.1s",
+              }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Confidence bar */}
         <div style={{ height: 3, background: "var(--border)", borderRadius: 2, overflow: "hidden" }}>
           <div style={{
             height: "100%", width: `${confidence}%`,
-            background: `linear-gradient(90deg, ${accentColor}bb, ${accentColor})`,
-            borderRadius: 2, transition: "width 0.6s ease",
+            background: `linear-gradient(90deg, ${accentColor}99, ${accentColor})`,
+            borderRadius: 2,
           }} />
         </div>
       </div>
 
-      {/* ─── Scrollable Body ─── */}
-      <div style={{ flex: 1, overflowY: "auto" }}>
-
-        {/* Quick stats: hold / stop / expected return */}
-        {(holdDays != null || stopLoss != null || expRet != null) && (
-          <>
-            <div style={{
-              display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
-              background: "var(--bg2)", margin: "0",
-              borderBottom: "1px solid var(--border)",
-            }}>
-              {[
-                {
-                  label: "HOLD",
-                  value: holdDays != null ? `${holdDays}d` : "—",
-                  color: "var(--text)",
-                },
-                {
-                  label: "STOP LOSS",
-                  value: stopLoss != null ? `−${Math.round(stopLoss * 100)}%` : "—",
-                  color: stopLoss != null ? "var(--red)" : "var(--dim)",
-                },
-                {
-                  label: "EXP RET",
-                  value: expRet != null ? `${expRet > 0 ? "+" : ""}${Number(expRet).toFixed(1)}%` : "—",
-                  color: expRet != null && expRet > 0 ? "var(--green)"
-                       : expRet != null && expRet < 0 ? "var(--red)"
-                       : "var(--dim)",
-                },
-              ].map((stat, i, arr) => (
-                <div key={stat.label} style={{
-                  padding: "12px 16px",
-                  borderRight: i < arr.length - 1 ? "1px solid var(--border)" : "none",
-                }}>
-                  <div style={{
-                    fontSize: 9, textTransform: "uppercase",
-                    letterSpacing: "0.09em", color: "var(--dim)", marginBottom: 4, fontWeight: 600,
-                  }}>
-                    {stat.label}
-                  </div>
-                  <div style={{
-                    fontFamily: "var(--font-dm-mono)", fontSize: 16,
-                    fontWeight: 700, color: stat.color,
-                  }}>
-                    {stat.value}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
+      {/* ── Thesis ──────────────────────────────────────────────── */}
+      <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--dim)", marginBottom: 6 }}>
+          AI Thesis
+        </div>
+        <p style={{
+          fontSize: 13, color: "var(--muted)", lineHeight: 1.65, margin: 0,
+          display: "-webkit-box",
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}>
+          {thesis || "No thesis available."}
+        </p>
+        {riskNote && (
+          <div style={{
+            marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start",
+            background: "rgba(217,119,6,0.07)", border: "1px solid rgba(217,119,6,0.2)",
+            borderRadius: 8, padding: "8px 12px",
+          }}>
+            <span style={{ flexShrink: 0, fontSize: 12, marginTop: 1 }}>⚠</span>
+            <span style={{ fontSize: 12, color: "var(--amber)", lineHeight: 1.5 }}>
+              <strong>Risk: </strong>{riskNote}
+            </span>
+          </div>
         )}
-
-        {/* Thesis */}
-        <Section title="Thesis">
-          <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.7, margin: 0 }}>
-            {thesis}
-          </p>
-          {detail?.risk_note && (
-            <div style={{
-              marginTop: 12,
-              display: "flex", gap: 10, alignItems: "flex-start",
-              background: "rgba(217,119,6,0.06)", border: "1px solid rgba(217,119,6,0.2)",
-              borderRadius: 10, padding: "10px 14px",
-            }}>
-              <span style={{ fontSize: 13, flexShrink: 0, marginTop: 1 }}>⚠</span>
-              <span style={{ fontSize: 12, color: "var(--amber)", lineHeight: 1.55 }}>
-                {detail.risk_note}
-              </span>
-            </div>
-          )}
-        </Section>
-
-        <Divider />
-
-        {/* Backtest stats */}
-        <Section title="Backtest results">
-          {loading ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <Skeleton height={14} width={200} />
-              <Skeleton height={64} />
-            </div>
-          ) : detail ? (
-            <BacktestStats
-              winRate={detail.win_rate}
-              avgReturn={detail.avg_return_pct}
-              sampleSize={detail.sample_size}
-              maxDrawdown={detail.max_drawdown_pct}
-              sharpe={detail.sharpe}
-            />
-          ) : (
-            <span style={{ fontSize: 12, color: "var(--dim)" }}>No backtest data available.</span>
-          )}
-        </Section>
-
-        {/* Signal sources — conditional */}
-        {!loading && (detail?.signals?.length ?? 0) > 0 && (
-          <>
-            <Divider />
-            <Section title="Contributing signals">
-              <SignalList signals={detail!.signals} />
-            </Section>
-          </>
-        )}
-        {loading && (
-          <>
-            <Divider />
-            <Section title="Contributing signals">
-              <Skeleton height={28} />
-              <div style={{ marginTop: 6 }}><Skeleton height={28} /></div>
-            </Section>
-          </>
-        )}
-
-        {/* Macro context — conditional */}
-        {!loading && (detail?.macro?.length ?? 0) > 0 && (
-          <>
-            <Divider />
-            <Section title="Macro context">
-              <MacroGrid macro={detail!.macro} />
-            </Section>
-          </>
-        )}
-
-        <div style={{ height: 20 }} />
       </div>
 
-      {/* ─── Footer ─── */}
+      {/* ── Stats row — only render cells that have data ─────────── */}
+      {(() => {
+        const cells: { label: string; value: string; color?: string; hint: string; tooltip: string }[] = []
+
+        if (winRate != null) cells.push({
+          label: "Win Rate",
+          value: `${(winRate * 100).toFixed(1)}%`,
+          color: winRate >= 0.5 ? "var(--green)" : "var(--red)",
+          hint: winRate >= 0.5 ? "Positive edge" : "Below 50%",
+          tooltip: "% of similar historical setups that were profitable. Above 50% is positive edge.",
+        })
+        if (sample != null) cells.push({
+          label: "Sample",
+          value: `${sample}`,
+          color: sample < 10 ? "var(--amber)" : undefined,
+          hint: sample < 10 ? "Low confidence" : sample < 30 ? "Moderate" : "Sufficient",
+          tooltip: "Number of similar past setups found. Under 10 = low statistical confidence.",
+        })
+        if (avgRet != null) cells.push({
+          label: "Exp Return",
+          value: `${avgRet > 0 ? "+" : ""}${Number(avgRet).toFixed(1)}%`,
+          color: avgRet > 0 ? "var(--green)" : "var(--red)",
+          hint: "Avg across past setups",
+          tooltip: "Average % gain/loss across all similar past setups. Past performance varies.",
+        })
+        if (holdDays != null) cells.push({
+          label: "Hold",
+          value: `${holdDays}d`,
+          hint: "Optimal hold period",
+          tooltip: "Recommended holding period in trading days.",
+        })
+        if (sharpe != null) cells.push({
+          label: "Sharpe",
+          value: Number(sharpe).toFixed(2),
+          color: sharpe > 1 ? "var(--green)" : sharpe < 0 ? "var(--red)" : undefined,
+          hint: sharpe > 1 ? "Good risk-adj." : sharpe < 0 ? "Negative" : "Moderate",
+          tooltip: "Risk-adjusted return (return ÷ volatility). Above 1.0 is good; above 2.0 is excellent.",
+        })
+
+        if (cells.length === 0) return null
+
+        return (
+          <div style={{
+            display: "grid", gridTemplateColumns: `repeat(${cells.length}, 1fr)`,
+            background: "var(--bg0)", borderBottom: "1px solid var(--border)",
+            padding: "12px 20px", gap: 0,
+          }}>
+            {cells.map((c) => (
+              <Stat key={c.label} {...c} />
+            ))}
+          </div>
+        )
+      })()}
+
+      {/* ── Order entry or status footer ────────────────────────── */}
       {isPending && (
         <OrderEntry
           strategy={s}
@@ -314,23 +319,29 @@ export function StrategyDetail({ strategy: s, onClose, onDismiss, onExecuted, on
       )}
 
       {isDismissed && (
-        <div style={{
-          borderTop: "1px solid var(--border)", padding: "14px 20px",
-          flexShrink: 0, background: "var(--bg1)",
-        }}>
+        <div style={{ padding: "14px 20px" }}>
           <button
             onClick={handleRestore}
             disabled={restoring}
             style={{
               width: "100%", background: "var(--bg2)",
               border: "1px solid var(--border2)", borderRadius: 10,
-              padding: "11px", color: "var(--text)", cursor: restoring ? "not-allowed" : "pointer",
-              fontSize: 13, fontWeight: 600, opacity: restoring ? 0.5 : 1,
-              transition: "opacity 0.1s",
+              padding: "11px", color: "var(--text)",
+              cursor: restoring ? "not-allowed" : "pointer",
+              fontSize: 13, fontWeight: 600,
+              opacity: restoring ? 0.5 : 1,
             }}
           >
             {restoring ? "Restoring…" : "↩ Restore to pending"}
           </button>
+        </div>
+      )}
+
+      {isExecuted && (
+        <div style={{ padding: "14px 20px", textAlign: "center" }}>
+          <span style={{ fontSize: 13, color: "var(--green)", fontWeight: 600 }}>
+            ✓ Order was submitted via Alpaca
+          </span>
         </div>
       )}
     </div>
