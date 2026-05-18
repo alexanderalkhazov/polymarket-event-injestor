@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/Skeleton"
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
 export default function TradesPage() {
-  const { data, isLoading } = useSWR("/api/trades", fetcher, { refreshInterval: 30000 })
+  const { data, isLoading, mutate } = useSWR("/api/trades", fetcher, { refreshInterval: 30000 })
 
   const positions = data?.positions ?? []
   const trades = data?.trades ?? []
@@ -32,7 +32,7 @@ export default function TradesPage() {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
-            <PositionsTable positions={positions} />
+            <PositionsTable positions={positions} onMutate={() => mutate()} />
             {hasAlpaca && <AlpacaOrdersTable orders={alpacaOrders} />}
             <ClosedTradesTable trades={trades} />
           </div>

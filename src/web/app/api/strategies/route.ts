@@ -81,6 +81,7 @@ export async function GET(req: Request) {
   const n = (v: any) => (v != null ? Number(v) : null)
   const rows = res.rows.map((r) => ({
     ...r,
+    confidence: n(r.model_confidence),
     model_confidence: n(r.model_confidence),
     expected_return_pct: n(r.expected_return_pct),
     stop_loss_pct: n(r.stop_loss_pct),
@@ -88,6 +89,7 @@ export async function GET(req: Request) {
     avg_return_pct: n(r.avg_return_pct),
     max_drawdown_pct: n(r.max_drawdown_pct),
     sample_size: n(r.sample_size),
+    sizing_pct: n(r.sizing_pct),
   }))
   return Response.json(rows)
 }

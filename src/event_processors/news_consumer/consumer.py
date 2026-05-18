@@ -7,7 +7,7 @@ import math
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 import asyncpg
 import redis.asyncio as aioredis
@@ -30,7 +30,29 @@ _HOT_KEYWORDS = [
     "surges", "plunges", "crashes", "soars", "spikes",
 ]
 
+_BULLISH_KW = {
+    "earnings beat", "merger", "acquisition", "takeover", "fda approval",
+    "fda approved", "analyst upgrade", "record revenue", "record profit",
+    "raises guidance", "short squeeze", "buyback", "dividend increase",
+    "surges", "soars", "spikes", "breakthrough", "record high",
+}
+_BEARISH_KW = {
+    "earnings miss", "bankruptcy", "chapter 11", "layoffs", "ceo resign",
+    "ceo fired", "analyst downgrade", "lowers guidance", "plunges", "crashes",
+    "recall", "fraud", "investigation", "shortfall", "loss widens",
+    "fda reject", "downgrade", "guidance cut", "restructuring",
+}
+
 MIN_SIGNAL_SCORE = 0.20
+
+
+def _detect_direction(article: dict) -> Optional[str]:
+    text = (article.get("headline", "") + " " + article.get("summary", "")).lower()
+    bull = sum(1 for kw in _BULLISH_KW if kw in text)
+    bear = sum(1 for kw in _BEARISH_KW if kw in text)
+    if bear > bull:  return "down"
+    if bull > bear:  return "up"
+    return None
 
 
 def _score_signal(article: dict, now: datetime) -> Tuple[float, str, list]:
@@ -172,12 +194,14 @@ class NewsConsumer:
                 "confidence_interval": confidence_interval,
             }
 
+            direction = _detect_direction(article)
             await self._pool.execute(
                 """INSERT INTO signals (id, source, symbol, type, score, direction, payload, created_at)
-                   VALUES ($1, 'news', $2, 'news_catalyst', $3, NULL, $4, $5)""",
+                   VALUES ($1, 'news', $2, 'news_catalyst', $3, $4, $5, $6)""",
                 uuid.UUID(signal_id),
                 ticker,
                 signal_score,
+                direction,
                 json.dumps(payload),
                 now,
             )

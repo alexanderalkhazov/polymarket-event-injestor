@@ -61,8 +61,23 @@ async def fan_out_to_users(opp: dict, db, redis) -> None:
             tp_pct,
             rationale,
         )
+        # Publish the full shape so the SSE consumer can render the card without a DB round-trip
+        publish_payload = {
+            **dict(saved),
+            "action":              opp.get("action", "buy"),
+            "tickers":             opp.get("tickers", []),
+            "summary":             opp.get("summary", ""),
+            "thesis":              opp.get("thesis", ""),
+            "confidence":          float(opp.get("model_confidence") or 0),
+            "expected_return_pct": float(opp["expected_return_pct"]) if opp.get("expected_return_pct") is not None else None,
+            "hold_days":           opp.get("hold_days"),
+            "win_rate":            float(opp["win_rate"]) if opp.get("win_rate") is not None else None,
+            "avg_return_pct":      None,
+            "max_drawdown_pct":    None,
+            "sample_size":         opp.get("backtest_sample_size"),
+        }
         await redis.publish(
             f"strategies:{user['id']}",
-            json.dumps(dict(saved), default=str),
+            json.dumps(publish_payload, default=str),
         )
         logger.info("Strategy delivered to user %s for opp %s", user["id"], opp["id"])

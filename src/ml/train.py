@@ -1,23 +1,41 @@
 """XGBoost model trainer. Run locally (NOT in Docker).
 
-  python src/ml/train.py
+  python src/ml/train.py [--min-samples N]
 
 Connects to TimescaleDB at localhost:5433 (the exposed port).
 Saves models/scoring_model.json and models/shap_explainer.pkl.
 Restart ai-correlator after training:
   docker compose restart ai-correlator
+
+Label strategy
+--------------
+We train two labels:
+  - y_long  = 1 if 5-day return > +3% (buy signal worked)
+  - y_short = 1 if 5-day return < -3% (sell signal worked)
+
+The correlator calls predict_proba(X)[0][1] to get P(signal succeeds).
+For buy signals, use the long model.  For sell signals, use the short model.
+This avoids the class-imbalance problem of training a single bullish model
+and then hoping it generalises to bearish setups.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import pickle
 import sys
+from pathlib import Path
 
 import asyncpg
 import pandas as pd
 import shap
 import xgboost as xgb
+from sklearn.metrics import (
+    average_precision_score,
+    f1_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import TimeSeriesSplit
 
 FEATURE_COLS = [
@@ -30,6 +48,7 @@ FEATURE_COLS = [
     "us_10y_yield", "fed_funds_rate", "usd_index", "social_sentiment_z",
 ]
 
+MODEL_DIR = Path(os.getenv("MODEL_DIR", "models"))
 TIMESCALE_URL = os.getenv(
     "TIMESCALE_URL",
     "postgresql://postgres:postgres@localhost:5433/market_history",
@@ -44,57 +63,110 @@ async def load_data() -> pd.DataFrame:
         )
     finally:
         await conn.close()
-    return pd.DataFrame([dict(r) for r in rows])
+    df = pd.DataFrame([dict(r) for r in rows])
+    print(f"Loaded {len(df)} labeled rows from TimescaleDB")
+    return df
+
+
+def _xgb(scale_pos_weight: float = 1.0) -> xgb.XGBClassifier:
+    return xgb.XGBClassifier(
+        n_estimators=400,
+        max_depth=4,
+        learning_rate=0.04,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        min_child_weight=3,
+        gamma=0.1,
+        scale_pos_weight=scale_pos_weight,  # handles class imbalance
+        tree_method="hist",
+        device="cpu",
+        eval_metric="aucpr",
+        use_label_encoder=False,
+        random_state=42,
+    )
+
+
+def _train_one(name: str, X: pd.DataFrame, y: pd.Series) -> xgb.XGBClassifier:
+    pos_rate = y.mean()
+    imbalance = (1 - pos_rate) / pos_rate if pos_rate > 0 else 1.0
+    print(f"\n── {name} model ─────────────────────────────")
+    print(f"   Samples: {len(y)}  positive: {pos_rate:.1%}  scale_pos_weight: {imbalance:.1f}")
+    if len(y) < 100:
+        print("   WARNING: very few samples — model will be unreliable.")
+
+    model = _xgb(scale_pos_weight=imbalance)
+    tscv = TimeSeriesSplit(n_splits=5)
+    all_val_y, all_val_p = [], []
+
+    for fold, (tr, va) in enumerate(tscv.split(X)):
+        model.fit(
+            X.iloc[tr], y.iloc[tr],
+            eval_set=[(X.iloc[va], y.iloc[va])],
+            verbose=False,
+        )
+        proba = model.predict_proba(X.iloc[va])[:, 1]
+        pred  = (proba >= 0.5).astype(int)
+        all_val_y.extend(y.iloc[va].tolist())
+        all_val_p.extend(proba.tolist())
+        f1  = f1_score(y.iloc[va], pred, zero_division=0)
+        auc = roc_auc_score(y.iloc[va], proba) if y.iloc[va].nunique() > 1 else float("nan")
+        print(f"   Fold {fold+1}: F1={f1:.3f}  AUC-ROC={auc:.3f}")
+
+    if len(set(all_val_y)) > 1:
+        auc_pr = average_precision_score(all_val_y, all_val_p)
+        print(f"   Overall AUC-PR (avg precision): {auc_pr:.3f}")
+
+    return model
+
+
+def _save_model(model: xgb.XGBClassifier, X: pd.DataFrame, suffix: str) -> None:
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    model_path = MODEL_DIR / f"scoring_model{suffix}.json"
+    shap_path  = MODEL_DIR / f"shap_explainer{suffix}.pkl"
+    model.save_model(str(model_path))
+    print(f"   Saved: {model_path}")
+    explainer = shap.TreeExplainer(model)
+    with open(shap_path, "wb") as f:
+        pickle.dump(explainer, f)
+    print(f"   Saved: {shap_path}")
+
+    importance = sorted(
+        zip(FEATURE_COLS, model.feature_importances_),
+        key=lambda x: x[1], reverse=True,
+    )
+    print("   Top 5 features:")
+    for feat, imp in importance[:5]:
+        print(f"     {feat:<38} {imp:.4f}")
 
 
 def train(df: pd.DataFrame) -> None:
     X = df[FEATURE_COLS].fillna(0)
-    y = (df["forward_return_5d"] > 0.03).astype(int)
 
-    print(f"Samples: {len(df)}, positive class: {y.mean():.1%}")
-    if len(df) < 100:
-        print("WARNING: very few labeled samples. Wait for more data before relying on this model.")
+    # ── Long model: did buying work? ─────────────────────────────────────────
+    y_long  = (df["forward_return_5d"] > 0.03).astype(int)
+    m_long  = _train_one("LONG (buy signal success)", X, y_long)
+    _save_model(m_long, X, "")          # default file used by correlator
 
-    model = xgb.XGBClassifier(
-        n_estimators=300, max_depth=4, learning_rate=0.05,
-        subsample=0.8, tree_method="hist", device="cpu",
-        eval_metric="logloss", use_label_encoder=False,
-        random_state=42,
-    )
-
-    tscv = TimeSeriesSplit(n_splits=5)
-    for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
-        model.fit(
-            X.iloc[train_idx], y.iloc[train_idx],
-            eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
-            verbose=False,
-        )
-        val_preds = model.predict(X.iloc[val_idx])
-        acc = (val_preds == y.iloc[val_idx]).mean()
-        print(f"  Fold {fold+1}: val accuracy {acc:.3f}")
-
-    os.makedirs("models", exist_ok=True)
-    model.save_model("models/scoring_model.json")
-    print("Saved: models/scoring_model.json")
-
-    explainer = shap.TreeExplainer(model)
-    with open("models/shap_explainer.pkl", "wb") as f:
-        pickle.dump(explainer, f)
-    print("Saved: models/shap_explainer.pkl")
-
-    # Feature importance summary
-    importance = sorted(
-        zip(FEATURE_COLS, model.feature_importances_),
-        key=lambda x: x[1], reverse=True
-    )
-    print("\nTop 10 features by importance:")
-    for feat, imp in importance[:10]:
-        print(f"  {feat:<40} {imp:.4f}")
+    # ── Short model: did selling work? ───────────────────────────────────────
+    y_short = (df["forward_return_5d"] < -0.03).astype(int)
+    m_short = _train_one("SHORT (sell signal success)", X, y_short)
+    _save_model(m_short, X, "_short")   # separate file, loaded for sell signals
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--min-samples", type=int, default=50,
+                        help="Abort if fewer labeled rows than this (default: 50)")
+    args = parser.parse_args()
+
     df = asyncio.run(load_data())
     if df.empty:
-        print("No labeled data found. Run the feature store and wait for labels to fill.")
+        print("No labeled data — run the feature store and wait for forward_return_5d to fill.")
         sys.exit(1)
+    if len(df) < args.min_samples:
+        print(f"Only {len(df)} samples < --min-samples {args.min_samples}. Pass a lower value to override.")
+        sys.exit(1)
+
     train(df)
+    print("\nDone. Restart ai-correlator to pick up the new model:")
+    print("  docker compose restart ai-correlator")

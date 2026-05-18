@@ -170,6 +170,9 @@ class AnalyticsConsumer:
         # Signal detection
         signals: List[Tuple[str, float, str, list, Optional[str]]] = []
 
+        # Price change is used for both momentum signal and volume-spike direction
+        chg = raw.get("price_change_1d_pct")
+
         cur_vol = raw.get("current_volume")
         avg_vol = raw.get("avg_volume_30d")
         if cur_vol and avg_vol and avg_vol > 0:
@@ -177,10 +180,11 @@ class AnalyticsConsumer:
             if ratio >= VOLUME_SPIKE_RATIO and not self._in_cooldown(ticker, "volume_spike"):
                 score, urgency, ci = _score_volume(ratio)
                 if score >= MIN_SIGNAL_SCORE:
-                    signals.append(("volume_spike", score, urgency, ci, None))
+                    # Use price direction to classify the volume spike
+                    vol_dir = "up" if (chg or 0) >= 0 else "down"
+                    signals.append(("volume_spike", score, urgency, ci, vol_dir))
                     self._set_cooldown(ticker, "volume_spike")
 
-        chg = raw.get("price_change_1d_pct")
         if chg is not None and abs(chg) >= PRICE_MOVE_PCT and not self._in_cooldown(ticker, "momentum"):
             score, urgency, ci = _score_momentum(chg)
             if score >= MIN_SIGNAL_SCORE:
@@ -193,7 +197,8 @@ class AnalyticsConsumer:
             if rsi > RSI_OVERBOUGHT or rsi < RSI_OVERSOLD:
                 score, urgency, ci = _score_rsi(rsi)
                 if score >= MIN_SIGNAL_SCORE:
-                    direction = "up" if rsi > 50 else "down"
+                    # Oversold (low RSI) = bullish setup; overbought (high RSI) = bearish
+                    direction = "up" if rsi < RSI_OVERSOLD else "down"
                     signals.append(("rsi_extreme", score, urgency, ci, direction))
                     self._set_cooldown(ticker, "rsi_extreme")
 

@@ -1,10 +1,9 @@
 "use client"
 
-import { ActionBadge, SourceChip } from "@/components/ui/Badge"
 import type { Strategy } from "@/hooks/useStrategyStream"
 
 interface StrategyCardProps {
-  strategy: Strategy & { sources?: string[] }
+  strategy: Strategy
   selected: boolean
   onClick: () => void
 }
@@ -13,185 +12,147 @@ function relTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime()
   const m = Math.floor(diff / 60000)
   if (m < 1) return "just now"
-  if (m < 60) return `${m} min ago`
-  return `${Math.floor(m / 60)}h ago`
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
 }
 
 export function StrategyCard({ strategy: s, selected, onClick }: StrategyCardProps) {
+  const action = s.action ?? "buy"
   const accentColor =
-    s.action === "buy" ? "var(--green)" : s.action === "sell" ? "var(--red)" : "var(--amber)"
+    action === "buy" ? "var(--green)" : action === "sell" ? "var(--red)" : "var(--amber)"
   const accentBg =
-    s.action === "buy" ? "var(--green-bg)" : s.action === "sell" ? "var(--red-bg)" : "var(--amber-bg)"
+    action === "buy" ? "var(--green-bg)" : action === "sell" ? "var(--red-bg)" : "var(--amber-bg)"
+
   const isDismissed = s.status === "dismissed"
-  const isExpired = s.status === "expired"
+  const isExpired   = s.status === "expired"
+  const isExecuted  = s.status === "executed"
 
-  const winRate = s.win_rate ?? null
-  const stopLoss = s.stop_loss_pct ?? null
-  // prefer historical backtest avg, fall back to Claude's prediction
-  const avgRet = s.avg_return_pct ?? s.expected_return_pct ?? null
-  const hasAnyStat = winRate !== null || stopLoss !== null || avgRet !== null
+  const winRate = s.win_rate != null ? Math.round(s.win_rate * 100) : null
+  const avgRet  = s.avg_return_pct ?? s.expected_return_pct ?? null
+  const stop    = s.stop_loss_pct  != null ? Math.round(s.stop_loss_pct * 100)  : null
 
-  const wrPct = winRate !== null ? Math.round(winRate * 100) : null
-  const wrColor =
-    wrPct === null ? "var(--muted)" : wrPct >= 60 ? "var(--green)" : wrPct >= 45 ? "var(--amber)" : "var(--red)"
+  const wrColor  = winRate == null ? "var(--dim)" : winRate >= 60 ? "var(--green)" : winRate >= 45 ? "var(--amber)" : "var(--red)"
+  const retColor = avgRet  == null ? "var(--dim)" : avgRet > 0 ? "var(--green)" : "var(--red)"
+  const conf     = Math.round((s.confidence ?? 0) * 100)
 
-  const confidence = s.confidence ?? 0
+  const faded = isExpired || isDismissed
 
   return (
     <div
       onClick={onClick}
       style={{
-        background: "var(--bg1)",
-        borderRadius: 16,
-        boxShadow: selected
-          ? `0 0 0 2px ${accentColor}, var(--shadow-card)`
-          : "var(--shadow-card)",
-        padding: "18px 20px",
+        background: selected ? "rgba(92,106,196,0.04)" : "var(--bg1)",
+        borderRadius: 14,
+        border: `1px solid ${selected ? "var(--primary)" : "var(--border)"}`,
+        borderLeft: `3px solid ${faded ? "var(--border2)" : accentColor}`,
+        padding: "15px 17px 13px",
         cursor: "pointer",
-        opacity: isExpired ? 0.35 : isDismissed ? 0.55 : 1,
-        transition: "box-shadow 0.15s",
-        borderLeft: `4px solid ${accentColor}`,
+        opacity: isExpired ? 0.28 : isDismissed ? 0.52 : 1,
+        boxShadow: selected
+          ? `0 0 0 3px var(--primary-dim), var(--shadow-md)`
+          : "var(--shadow-sm)",
+        transition: "box-shadow 0.12s, border-color 0.12s, opacity 0.12s",
       }}
     >
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        {/* Icon avatar */}
-        <div style={{
-          width: 36, height: 36, borderRadius: "50%",
-          background: accentBg,
-          display: "flex", alignItems: "center", justifyContent: "center",
+      {/* Row 1: Ticker + action badge + status */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{
+          fontFamily: "var(--font-dm-mono)", fontSize: 15, fontWeight: 600,
+          color: "var(--text)", flex: 1,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {(s.tickers ?? []).join(" / ") || "—"}
+        </span>
+        <span style={{
+          background: accentBg, color: accentColor,
+          borderRadius: 5, padding: "2px 7px",
+          fontSize: 10, fontWeight: 700,
+          fontFamily: "var(--font-dm-mono)", letterSpacing: "0.06em",
           flexShrink: 0,
         }}>
-          <span style={{ fontSize: 17, color: accentColor }}>
-            {s.action === "buy" ? "↑" : s.action === "sell" ? "↓" : "◉"}
+          {action.toUpperCase()}
+        </span>
+        {isExecuted && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--green)", letterSpacing: "0.07em", flexShrink: 0 }}>
+            ✓ DONE
           </span>
-        </div>
-
-        {/* Ticker + meta */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontFamily: "var(--font-dm-mono)", fontSize: 17, fontWeight: 700,
-            color: "var(--text)", lineHeight: 1.2,
-          }}>
-            {(s.tickers ?? []).join(" / ") || "—"}
-          </div>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-            {Math.round(confidence * 100)}% confidence · {relTime(s.created_at)}
-          </div>
-        </div>
-
-        {/* Right badges */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          {isDismissed && (
-            <span style={{
-              fontSize: 10, color: "var(--dim)", fontWeight: 600,
-              letterSpacing: "0.05em", textTransform: "uppercase",
-            }}>
-              dismissed
-            </span>
-          )}
-          {isExpired && (
-            <span style={{
-              fontSize: 10, color: "var(--dim)", fontWeight: 600,
-              letterSpacing: "0.05em", textTransform: "uppercase",
-            }}>
-              expired
-            </span>
-          )}
-          <ActionBadge action={s.action} />
-        </div>
+        )}
+        {isDismissed && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--dim)", letterSpacing: "0.07em", flexShrink: 0 }}>
+            DISMISSED
+          </span>
+        )}
       </div>
 
       {/* Summary */}
       <p style={{
-        fontSize: 14, color: "var(--text)", lineHeight: 1.5,
-        marginBottom: 14,
+        fontSize: 13, lineHeight: 1.55,
+        color: faded ? "var(--dim)" : "var(--muted)",
+        margin: "0 0 12px",
         display: "-webkit-box",
         WebkitLineClamp: 2,
         WebkitBoxOrient: "vertical",
         overflow: "hidden",
       }}>
-        {s.summary}
+        {s.summary || "—"}
       </p>
 
-      {/* Stats row — only if at least one stat is non-null */}
-      {hasAnyStat ? (
+      {/* Stats strip */}
+      {(winRate != null || avgRet != null || stop != null) && (
         <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 0,
-          background: "var(--bg2)",
-          borderRadius: 10,
-          overflow: "hidden",
-          marginBottom: 14,
+          display: "flex",
+          background: "var(--bg2)", borderRadius: 8,
           border: "1px solid var(--border)",
+          overflow: "hidden", marginBottom: 11,
         }}>
           {[
-            {
-              label: "WIN RATE",
-              value: wrPct !== null ? `${wrPct}%` : "—",
-              color: wrColor,
-            },
-            {
-              label: "AVG RET",
-              value: avgRet != null && avgRet !== 0
-                ? `${avgRet > 0 ? "+" : ""}${Number(avgRet).toFixed(1)}%`
-                : "—",
-              color: avgRet != null && avgRet > 0
-                ? "var(--green)"
-                : avgRet != null && avgRet < 0
-                  ? "var(--red)"
-                  : "var(--muted)",
-            },
-            {
-              label: "STOP",
-              value: stopLoss !== null ? `−${Math.round(stopLoss * 100)}%` : "—",
-              color: stopLoss !== null ? "var(--red)" : "var(--muted)",
-            },
-          ].map((stat, i, arr) => (
-            <div key={stat.label} style={{
-              padding: "10px 12px",
+            { label: "WIN RATE", value: winRate != null ? `${winRate}%` : "—",          color: wrColor },
+            { label: "AVG RET",  value: avgRet  != null ? `${avgRet > 0 ? "+" : ""}${Number(avgRet).toFixed(1)}%` : "—", color: retColor },
+            { label: "STOP",     value: stop    != null ? `−${stop}%`   : "—",          color: stop != null ? "var(--red)" : "var(--dim)" },
+          ].map(({ label, value, color }, i, arr) => (
+            <div key={label} style={{
+              flex: 1, padding: "7px 10px",
               borderRight: i < arr.length - 1 ? "1px solid var(--border)" : "none",
             }}>
               <div style={{
-                fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em",
-                color: "var(--dim)", marginBottom: 4,
+                fontSize: 9, textTransform: "uppercase",
+                letterSpacing: "0.08em", color: "var(--dim)", marginBottom: 3,
               }}>
-                {stat.label}
+                {label}
               </div>
               <div style={{
-                fontFamily: "var(--font-dm-mono)", fontSize: 13, fontWeight: 700,
-                color: stat.color,
+                fontFamily: "var(--font-dm-mono)", fontSize: 12, fontWeight: 600,
+                color: value === "—" ? "var(--dim)" : color,
               }}>
-                {stat.value}
+                {value}
               </div>
             </div>
           ))}
         </div>
-      ) : (
-        /* Confidence progress bar when no stats available */
-        <div style={{ marginBottom: 14 }}>
-          <div style={{
-            height: 3, borderRadius: 2,
-            background: "var(--bg3)",
-            overflow: "hidden",
-          }}>
-            <div style={{
-              height: "100%",
-              width: `${Math.round(confidence * 100)}%`,
-              background: accentColor,
-              borderRadius: 2,
-              transition: "width 0.4s ease",
-            }} />
-          </div>
-        </div>
       )}
 
-      {/* Sources */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {(s.sources ?? []).map((src: string) => (
-          <SourceChip key={src} source={src} />
-        ))}
+      {/* Footer: confidence bar + % + time */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{
+          flex: 1, height: 2, background: "var(--border)",
+          borderRadius: 2, overflow: "hidden",
+        }}>
+          <div style={{
+            height: "100%", width: `${conf}%`,
+            background: faded ? "var(--border2)" : accentColor,
+            borderRadius: 2,
+            transition: "width 0.4s ease",
+          }} />
+        </div>
+        <span style={{ fontFamily: "var(--font-dm-mono)", fontSize: 11, color: "var(--dim)", flexShrink: 0 }}>
+          {conf}%
+        </span>
+        <span style={{ color: "var(--dim)", fontSize: 11, flexShrink: 0 }}>·</span>
+        <span style={{ fontSize: 11, color: "var(--dim)", flexShrink: 0 }}>
+          {relTime(s.created_at)}
+        </span>
       </div>
     </div>
   )

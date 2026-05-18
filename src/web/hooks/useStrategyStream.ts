@@ -17,6 +17,7 @@ export interface Strategy {
   avg_return_pct: number | null
   max_drawdown_pct: number | null
   sample_size: number | null
+  sizing_pct: number | null
   rationale: string
   expires_at: string
   created_at: string

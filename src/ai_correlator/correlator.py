@@ -40,8 +40,11 @@ from event_detectors.polymarket_producer.sentiment import (
 logger = logging.getLogger(__name__)
 
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
-MODEL_PATH = Path(os.getenv("MODEL_DIR", "/app/models")) / "scoring_model.json"
-SHAP_PATH  = Path(os.getenv("MODEL_DIR", "/app/models")) / "shap_explainer.pkl"
+_MODEL_DIR   = Path(os.getenv("MODEL_DIR", "/app/models"))
+MODEL_PATH   = _MODEL_DIR / "scoring_model.json"
+MODEL_SHORT  = _MODEL_DIR / "scoring_model_short.json"
+SHAP_PATH    = _MODEL_DIR / "shap_explainer.pkl"
+SHAP_SHORT   = _MODEL_DIR / "shap_explainer_short.pkl"
 
 FEATURE_COLS = [
     "poly_conviction_delta_1h", "poly_conviction_delta_4h",
@@ -53,10 +56,12 @@ FEATURE_COLS = [
     "us_10y_yield", "fed_funds_rate", "usd_index", "social_sentiment_z",
 ]
 
-_claude:   Optional[anthropic.Anthropic] = None
-_oai:      Optional[OpenAI] = None
-_model     = None
-_explainer = None
+_claude:         Optional[anthropic.Anthropic] = None
+_oai:            Optional[OpenAI] = None
+_model           = None   # long/buy model
+_model_short     = None   # short/sell model
+_explainer       = None
+_explainer_short = None
 
 
 def _get_claude() -> anthropic.Anthropic:
@@ -74,7 +79,7 @@ def _get_oai() -> OpenAI:
 
 
 def _load_model() -> bool:
-    global _model, _explainer
+    global _model, _model_short, _explainer, _explainer_short
     if not MODEL_PATH.exists():
         logger.info("No model file found — using rule-based scorer")
         return False
@@ -85,7 +90,16 @@ def _load_model() -> bool:
         if SHAP_PATH.exists():
             with open(SHAP_PATH, "rb") as f:
                 _explainer = pickle.load(f)
-        logger.info("XGBoost model loaded from %s", MODEL_PATH)
+        # Load the short/sell model if it exists alongside the main model
+        if MODEL_SHORT.exists():
+            _model_short = xgb.XGBClassifier()
+            _model_short.load_model(str(MODEL_SHORT))
+            if SHAP_SHORT.exists():
+                with open(SHAP_SHORT, "rb") as f:
+                    _explainer_short = pickle.load(f)
+            logger.info("XGBoost long+short models loaded")
+        else:
+            logger.info("XGBoost long model loaded (no short model — sell signals use long model)")
         return True
     except Exception as exc:
         logger.warning("Failed to load model: %s — falling back to rule scorer", exc)
@@ -95,15 +109,18 @@ def _load_model() -> bool:
 _use_xgboost = _load_model()
 
 
-def _score(feat_dict: dict) -> tuple[float, list[dict]]:
+def _score(feat_dict: dict, direction: str = "up") -> tuple[float, list[dict]]:
     if _use_xgboost and _model is not None:
         try:
             import pandas as pd
             X = pd.DataFrame([{c: feat_dict.get(c) or 0 for c in FEATURE_COLS}]).fillna(0)
-            confidence = float(_model.predict_proba(X)[0][1])
+            # Use direction-specific model when available
+            active_model     = (_model_short if direction == "down" and _model_short else _model)
+            active_explainer = (_explainer_short if direction == "down" and _explainer_short else _explainer)
+            confidence = float(active_model.predict_proba(X)[0][1])
             top_features: list[dict] = []
-            if _explainer is not None:
-                shap_vals = _explainer.shap_values(X)[0]
+            if active_explainer is not None:
+                shap_vals = active_explainer.shap_values(X)[0]
                 top_features = sorted(
                     [
                         {
@@ -121,8 +138,8 @@ def _score(feat_dict: dict) -> tuple[float, list[dict]]:
             logger.warning("XGBoost scoring failed: %s — using rule scorer", exc)
 
     from ml.rule_scorer import rule_based_score
-    logger.debug("rule-based scorer active")
-    return rule_based_score(feat_dict), []
+    logger.debug("rule-based scorer active (direction=%s)", direction)
+    return rule_based_score(feat_dict, direction=direction), []
 
 
 _POLY_KEYWORD_TICKERS: list[tuple[list[str], str]] = [
@@ -355,12 +372,13 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         feat_dict = dict(feat_row)
 
     # 3. Score — polymarket uses raw conviction score directly
+    sig_direction = signal.get("direction") or "up"
     if signal["source"] == "polymarket":
         raw_score = float(signal.get("score") or 0)
         confidence = min(raw_score, 1.0)
         top_features: list[dict] = []
     else:
-        confidence, top_features = _score(feat_dict)
+        confidence, top_features = _score(feat_dict, direction=sig_direction)
     logger.info("Signal %s: symbol=%s source=%s confidence=%.3f", signal_id[:8], symbol, signal["source"], confidence)
 
     # 4. Gate
@@ -439,8 +457,9 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     except Exception:
         opp_vec = None
 
-    # Direction from signal (not hypothesis placeholder which always says "up")
-    sig_direction = signal.get("direction") or hypothesis.get("direction", "up")
+    # sig_direction set at step 3; fall back to hypothesis only if signal has no direction
+    if not signal.get("direction"):
+        sig_direction = hypothesis.get("direction", "up")
     action = "buy" if sig_direction == "up" else "sell"
 
     # For polymarket: the consumer already resolved matched_tickers using the sentiment

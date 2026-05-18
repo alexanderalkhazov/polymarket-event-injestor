@@ -1,24 +1,15 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { SectionLabel } from "@/components/ui/SectionLabel"
 import { Skeleton } from "@/components/ui/Skeleton"
 import { BacktestStats } from "@/components/strategy/BacktestStats"
 import { SignalList } from "@/components/strategy/SignalList"
 import { MacroGrid } from "@/components/strategy/MacroGrid"
-import { SizingBreakdown } from "@/components/strategy/SizingBreakdown"
-import { ConfirmFooter } from "@/components/strategy/ConfirmFooter"
+import { OrderEntry } from "@/components/strategy/OrderEntry"
 import { showToast } from "@/components/ui/Toast"
 import type { Strategy } from "@/hooks/useStrategyStream"
 
-interface Signal {
-  id: string
-  source: string
-  type: string
-  symbol: string
-  score: number
-}
-
+interface Signal { id: string; source: string; type: string; symbol: string; score: number }
 interface MacroRow { series_id: string; value: number }
 
 interface DetailData {
@@ -33,6 +24,7 @@ interface DetailData {
   hold_days: number | null
   stop_loss_pct: number | null
   expected_return_pct: number | null
+  sizing_pct: number | null
 }
 
 interface StrategyDetailProps {
@@ -43,22 +35,39 @@ interface StrategyDetailProps {
   onRestore: () => void
 }
 
+function Divider() {
+  return <div style={{ height: 1, background: "var(--border)", margin: "0 -20px" }} />
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ padding: "18px 20px" }}>
+      <div style={{
+        fontSize: 10, fontWeight: 700, textTransform: "uppercase",
+        letterSpacing: "0.1em", color: "var(--dim)", marginBottom: 12,
+      }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  )
+}
+
 export function StrategyDetail({ strategy: s, onClose, onDismiss, onExecuted, onRestore }: StrategyDetailProps) {
-  const [detail, setDetail] = useState<DetailData | null>(null)
+  const [detail, setDetail]   = useState<DetailData | null>(null)
   const [loading, setLoading] = useState(true)
   const [restoring, setRestoring] = useState(false)
 
   useEffect(() => {
+    if (!s?.id) return
     setLoading(true)
     setDetail(null)
     fetch(`/api/strategies?id=${s.id}`)
       .then((r) => r.json())
-      .then((data) => {
-        setDetail(data)
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
-  }, [s.id])
+      .then((data) => { if (data && !data.error) setDetail(data) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [s?.id])
 
   const handleRestore = async () => {
     setRestoring(true)
@@ -77,189 +86,247 @@ export function StrategyDetail({ strategy: s, onClose, onDismiss, onExecuted, on
     }
   }
 
-  const isPending = s.status === "pending"
+  if (!s) return null
+
+  const action      = s.action ?? "buy"
+  const tickers     = s.tickers ?? []
+  const confidence  = Math.round((s.confidence ?? 0) * 100)
+  const isPending   = s.status === "pending"
   const isDismissed = s.status === "dismissed"
-  const isExecuted = s.status === "executed"
+  const isExecuted  = s.status === "executed"
+
   const accentColor =
-    s.action === "buy" ? "var(--green)" : s.action === "sell" ? "var(--red)" : "var(--amber)"
+    action === "buy" ? "var(--green)" : action === "sell" ? "var(--red)" : "var(--amber)"
+  const accentBg =
+    action === "buy" ? "var(--green-bg)" : action === "sell" ? "var(--red-bg)" : "var(--amber-bg)"
+
+  const holdDays = detail?.hold_days ?? s.hold_days ?? null
+  const stopLoss = detail?.stop_loss_pct ?? s.stop_loss_pct ?? null
+  const expRet   = detail?.expected_return_pct ?? s.expected_return_pct ?? null
+  const thesis   = s.thesis ?? s.summary ?? ""
 
   return (
     <div style={{
       display: "flex", flexDirection: "column", height: "100%",
       background: "var(--bg1)", borderLeft: "1px solid var(--border)",
     }}>
-      {/* header */}
+      {/* ─── Header ─── */}
       <div style={{
-        borderBottom: "1px solid var(--border)", padding: "14px 20px", flexShrink: 0,
-        borderTop: `2px solid ${accentColor}`,
-        display: "flex", alignItems: "flex-start", gap: 12,
+        padding: "16px 20px 0", flexShrink: 0,
+        background: "var(--bg1)",
       }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontFamily: "var(--font-dm-mono)", fontSize: 15, fontWeight: 700, marginBottom: 3,
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-          }}>
-            {(s.tickers ?? []).join(" / ")}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 12 }}>
+          {/* Ticker */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontFamily: "var(--font-dm-mono)", fontSize: 20, fontWeight: 700,
+              color: "var(--text)", letterSpacing: "-0.01em",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}>
+              {tickers.join(" / ") || "—"}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5, flexWrap: "wrap" }}>
+              <span style={{
+                background: accentBg, color: accentColor,
+                borderRadius: 5, padding: "2px 8px",
+                fontSize: 11, fontWeight: 700,
+                fontFamily: "var(--font-dm-mono)", letterSpacing: "0.06em",
+              }}>
+                {action.toUpperCase()}
+              </span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                {confidence}% confidence
+              </span>
+              {isExecuted && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, color: "var(--green)",
+                  letterSpacing: "0.06em",
+                }}>
+                  ✓ EXECUTED
+                </span>
+              )}
+              {isDismissed && (
+                <span style={{ fontSize: 10, fontWeight: 600, color: "var(--dim)", letterSpacing: "0.06em" }}>
+                  DISMISSED
+                </span>
+              )}
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 8 }}>
-            <span
-              style={{
-                background: s.action === "buy" ? "var(--green-bg)" : s.action === "sell" ? "var(--red-bg)" : "var(--amber-bg)",
-                color: accentColor,
-                borderRadius: 5, padding: "1px 7px", fontSize: 11, fontWeight: 700,
-              }}
-            >
-              {s.action?.toUpperCase()}
-            </span>
-            <span>{Math.round((s.confidence ?? 0) * 100)}% confidence</span>
-            {isExecuted && <span style={{ color: "var(--green)", fontWeight: 600 }}>EXECUTED</span>}
-            {isDismissed && <span style={{ color: "var(--dim)" }}>DISMISSED</span>}
-          </div>
+          {/* Close */}
+          <button
+            onClick={onClose}
+            style={{
+              background: "var(--bg3)", border: "none", borderRadius: 8,
+              width: 30, height: 30, cursor: "pointer",
+              color: "var(--muted)", fontSize: 14, lineHeight: 1,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              flexShrink: 0, transition: "background 0.1s",
+            }}
+          >
+            ✕
+          </button>
         </div>
-        {/* close button */}
-        <button
-          onClick={onClose}
-          title="Close"
-          style={{
-            background: "none", border: "none", cursor: "pointer",
-            color: "var(--dim)", fontSize: 18, lineHeight: 1,
-            padding: "2px 4px", borderRadius: 6,
-            flexShrink: 0, marginTop: -2,
-          }}
-        >
-          ✕
-        </button>
+
+        {/* Confidence bar */}
+        <div style={{ height: 3, background: "var(--border)", borderRadius: 2, overflow: "hidden" }}>
+          <div style={{
+            height: "100%", width: `${confidence}%`,
+            background: `linear-gradient(90deg, ${accentColor}bb, ${accentColor})`,
+            borderRadius: 2, transition: "width 0.6s ease",
+          }} />
+        </div>
       </div>
 
-      {/* scrollable body */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* ─── Scrollable Body ─── */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
 
-        {/* thesis */}
-        <div>
-          <SectionLabel>Thesis</SectionLabel>
-          <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, margin: 0, marginBottom: detail?.risk_note ? 10 : 0 }}>
-            {s.thesis || s.summary}
+        {/* Quick stats: hold / stop / expected return */}
+        {(holdDays != null || stopLoss != null || expRet != null) && (
+          <>
+            <div style={{
+              display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
+              background: "var(--bg2)", margin: "0",
+              borderBottom: "1px solid var(--border)",
+            }}>
+              {[
+                {
+                  label: "HOLD",
+                  value: holdDays != null ? `${holdDays}d` : "—",
+                  color: "var(--text)",
+                },
+                {
+                  label: "STOP LOSS",
+                  value: stopLoss != null ? `−${Math.round(stopLoss * 100)}%` : "—",
+                  color: stopLoss != null ? "var(--red)" : "var(--dim)",
+                },
+                {
+                  label: "EXP RET",
+                  value: expRet != null ? `${expRet > 0 ? "+" : ""}${Number(expRet).toFixed(1)}%` : "—",
+                  color: expRet != null && expRet > 0 ? "var(--green)"
+                       : expRet != null && expRet < 0 ? "var(--red)"
+                       : "var(--dim)",
+                },
+              ].map((stat, i, arr) => (
+                <div key={stat.label} style={{
+                  padding: "12px 16px",
+                  borderRight: i < arr.length - 1 ? "1px solid var(--border)" : "none",
+                }}>
+                  <div style={{
+                    fontSize: 9, textTransform: "uppercase",
+                    letterSpacing: "0.09em", color: "var(--dim)", marginBottom: 4, fontWeight: 600,
+                  }}>
+                    {stat.label}
+                  </div>
+                  <div style={{
+                    fontFamily: "var(--font-dm-mono)", fontSize: 16,
+                    fontWeight: 700, color: stat.color,
+                  }}>
+                    {stat.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Thesis */}
+        <Section title="Thesis">
+          <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.7, margin: 0 }}>
+            {thesis}
           </p>
           {detail?.risk_note && (
             <div style={{
-              marginTop: 10,
-              background: "var(--amber-bg)", border: "1px solid rgba(217,119,6,0.22)",
-              borderRadius: 8, padding: "8px 12px",
-              fontSize: 12, color: "var(--amber)", lineHeight: 1.5,
+              marginTop: 12,
+              display: "flex", gap: 10, alignItems: "flex-start",
+              background: "rgba(217,119,6,0.06)", border: "1px solid rgba(217,119,6,0.2)",
+              borderRadius: 10, padding: "10px 14px",
             }}>
-              ⚠ {detail.risk_note}
+              <span style={{ fontSize: 13, flexShrink: 0, marginTop: 1 }}>⚠</span>
+              <span style={{ fontSize: 12, color: "var(--amber)", lineHeight: 1.55 }}>
+                {detail.risk_note}
+              </span>
             </div>
           )}
-        </div>
+        </Section>
 
-        {/* quick stats: hold days + stop + expected return */}
-        {(s.hold_days || s.stop_loss_pct || s.expected_return_pct) && (
-          <div style={{
-            display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
-            background: "var(--bg2)", borderRadius: 10,
-            border: "1px solid var(--border)", overflow: "hidden",
-          }}>
-            {[
-              {
-                label: "HOLD",
-                value: s.hold_days != null ? `${s.hold_days}d` : "—",
-                color: "var(--text)",
-              },
-              {
-                label: "STOP LOSS",
-                value: s.stop_loss_pct != null ? `−${Math.round(s.stop_loss_pct * 100)}%` : "—",
-                color: s.stop_loss_pct != null ? "var(--red)" : "var(--muted)",
-              },
-              {
-                label: "EXP RET",
-                value: s.expected_return_pct != null && s.expected_return_pct !== 0
-                  ? `${s.expected_return_pct > 0 ? "+" : ""}${s.expected_return_pct}%`
-                  : "—",
-                color: s.expected_return_pct != null && s.expected_return_pct > 0
-                  ? "var(--green)"
-                  : s.expected_return_pct != null && s.expected_return_pct < 0
-                    ? "var(--red)"
-                    : "var(--muted)",
-              },
-            ].map((stat, i, arr) => (
-              <div key={stat.label} style={{
-                padding: "10px 14px",
-                borderRight: i < arr.length - 1 ? "1px solid var(--border)" : "none",
-              }}>
-                <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--dim)", marginBottom: 4 }}>
-                  {stat.label}
-                </div>
-                <div style={{ fontFamily: "var(--font-dm-mono)", fontSize: 14, fontWeight: 700, color: stat.color }}>
-                  {stat.value}
-                </div>
-              </div>
-            ))}
-          </div>
+        <Divider />
+
+        {/* Backtest stats */}
+        <Section title="Backtest results">
+          {loading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <Skeleton height={14} width={200} />
+              <Skeleton height={64} />
+            </div>
+          ) : detail ? (
+            <BacktestStats
+              winRate={detail.win_rate}
+              avgReturn={detail.avg_return_pct}
+              sampleSize={detail.sample_size}
+              maxDrawdown={detail.max_drawdown_pct}
+              sharpe={detail.sharpe}
+            />
+          ) : (
+            <span style={{ fontSize: 12, color: "var(--dim)" }}>No backtest data available.</span>
+          )}
+        </Section>
+
+        {/* Signal sources — conditional */}
+        {!loading && (detail?.signals?.length ?? 0) > 0 && (
+          <>
+            <Divider />
+            <Section title="Contributing signals">
+              <SignalList signals={detail!.signals} />
+            </Section>
+          </>
+        )}
+        {loading && (
+          <>
+            <Divider />
+            <Section title="Contributing signals">
+              <Skeleton height={28} />
+              <div style={{ marginTop: 6 }}><Skeleton height={28} /></div>
+            </Section>
+          </>
         )}
 
-        {/* backtest stats */}
-        {loading ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Skeleton height={14} width={120} />
-            <Skeleton height={60} />
-          </div>
-        ) : detail ? (
-          <BacktestStats
-            winRate={detail.win_rate}
-            avgReturn={detail.avg_return_pct}
-            sampleSize={detail.sample_size}
-            maxDrawdown={detail.max_drawdown_pct}
-            sharpe={detail.sharpe ?? null}
-          />
-        ) : null}
-
-        {/* signal list */}
-        {loading ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <Skeleton height={14} width={140} />
-            <Skeleton height={32} />
-            <Skeleton height={32} />
-          </div>
-        ) : detail?.signals?.length ? (
-          <SignalList signals={detail.signals} />
-        ) : null}
-
-        {/* sizing breakdown — only for pending */}
-        {isPending && (
-          <SizingBreakdown
-            accountEquity={100000}
-            riskLevel="moderate"
-            expectedReturnPct={s.expected_return_pct}
-            stopLossPct={s.stop_loss_pct}
-            ticker={(s.tickers ?? [])[0] ?? ""}
-          />
+        {/* Macro context — conditional */}
+        {!loading && (detail?.macro?.length ?? 0) > 0 && (
+          <>
+            <Divider />
+            <Section title="Macro context">
+              <MacroGrid macro={detail!.macro} />
+            </Section>
+          </>
         )}
 
-        {/* macro grid */}
-        {detail?.macro?.length ? <MacroGrid macro={detail.macro} /> : null}
+        <div style={{ height: 20 }} />
       </div>
 
-      {/* footer */}
+      {/* ─── Footer ─── */}
       {isPending && (
-        <ConfirmFooter
-          strategyId={s.id}
-          isPaper={true}
-          expiresAt={s.expires_at}
+        <OrderEntry
+          strategy={s}
+          detail={detail}
           onDismiss={onDismiss}
           onExecuted={onExecuted}
         />
       )}
 
       {isDismissed && (
-        <div style={{ borderTop: "1px solid var(--border)", padding: "14px 20px", flexShrink: 0 }}>
+        <div style={{
+          borderTop: "1px solid var(--border)", padding: "14px 20px",
+          flexShrink: 0, background: "var(--bg1)",
+        }}>
           <button
             onClick={handleRestore}
             disabled={restoring}
             style={{
               width: "100%", background: "var(--bg2)",
-              border: "1px solid var(--border2)", borderRadius: 8,
-              padding: "10px", color: "var(--text)", cursor: "pointer",
+              border: "1px solid var(--border2)", borderRadius: 10,
+              padding: "11px", color: "var(--text)", cursor: restoring ? "not-allowed" : "pointer",
               fontSize: 13, fontWeight: 600, opacity: restoring ? 0.5 : 1,
+              transition: "opacity 0.1s",
             }}
           >
             {restoring ? "Restoring…" : "↩ Restore to pending"}
