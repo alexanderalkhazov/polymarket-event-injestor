@@ -45,7 +45,7 @@ export async function POST(req: Request) {
     return Response.json({ order_id: order.id, symbol, qty: order.qty })
   }
 
-  const { strategy_id, confirmed, order_type, limit_price, stop_loss_price, take_profit_price } = body
+  const { strategy_id, confirmed, order_type, limit_price, stop_loss_price, take_profit_price, trail_percent } = body
   if (!confirmed)
     return Response.json({ error: "explicit confirmation required" }, { status: 400 })
 
@@ -113,7 +113,11 @@ export async function POST(req: Request) {
   if (order_type === "limit" && limit_price) {
     orderParams.limit_price = Number(limit_price).toFixed(2)
   }
-  if (stop_loss_price || take_profit_price) {
+  if (trail_percent) {
+    // Trailing stop — submits as a separate attached order; incompatible with bracket
+    orderParams.order_class  = "oto"   // one-triggers-other
+    orderParams.stop_loss    = { trail_percent: Number(trail_percent).toFixed(2) }
+  } else if (stop_loss_price || take_profit_price) {
     orderParams.order_class = "bracket"
     if (stop_loss_price) {
       orderParams.stop_loss = { stop_price: Number(stop_loss_price).toFixed(2) }
@@ -193,6 +197,34 @@ export async function GET(req: Request) {
     "SELECT * FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100",
     [userId],
   )
+
+  // Sync fill status for any submitted orders that may have filled since last check
+  if (hasAlpaca) {
+    const submitted = tradesRes.rows.filter((t) => t.status === "submitted" && t.alpaca_order_id)
+    if (submitted.length) {
+      const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
+      await Promise.all(submitted.map(async (trade) => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const order = await (alpaca as any).getOrder(trade.alpaca_order_id)
+          if (order.status === "filled") {
+            const fillPrice = parseFloat(order.filled_avg_price ?? "0") || null
+            const filledAt  = order.filled_at ? new Date(order.filled_at) : new Date()
+            await db.query(
+              "UPDATE trades SET status='filled', fill_price=$1, filled_at=$2 WHERE id=$3",
+              [fillPrice, filledAt, trade.id]
+            )
+            trade.status     = "filled"
+            trade.fill_price = fillPrice
+            trade.filled_at  = filledAt
+          } else if (["cancelled", "expired", "rejected"].includes(order.status)) {
+            await db.query("UPDATE trades SET status=$1 WHERE id=$2", [order.status, trade.id])
+            trade.status = order.status
+          }
+        } catch { /* order may not exist yet — skip */ }
+      }))
+    }
+  }
 
   // Live positions and orders come from Alpaca (not the local shadow table)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

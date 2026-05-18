@@ -59,8 +59,19 @@ FEATURE_COLS = [
 ]
 
 _ET = ZoneInfo("America/New_York")
-MAX_POSITIONS       = int(os.getenv("MAX_POSITIONS", "5"))
-EARNINGS_GUARD_DAYS = int(os.getenv("EARNINGS_GUARD_DAYS", "3"))
+MAX_POSITIONS        = int(os.getenv("MAX_POSITIONS", "5"))
+EARNINGS_GUARD_DAYS  = int(os.getenv("EARNINGS_GUARD_DAYS", "3"))
+
+# Regime-adjusted confidence thresholds
+# Trading against the trend requires much higher conviction
+REGIME_THRESHOLD = {
+    ("bear",     "buy"):  0.80,   # buying into a downtrend — very high bar
+    ("bull",     "sell"): 0.78,   # shorting a bull market — high bar
+    ("sideways", "buy"):  0.68,
+    ("sideways", "sell"): 0.68,
+    ("bull",     "buy"):  CONFIDENCE_THRESHOLD,
+    ("bear",     "sell"): CONFIDENCE_THRESHOLD,
+}
 
 _claude:         Optional[anthropic.Anthropic] = None
 _oai:            Optional[OpenAI] = None
@@ -163,6 +174,47 @@ def _is_near_earnings(symbol: str) -> bool:
     except Exception:
         pass
     return False
+
+
+async def _get_market_regime(tsdb: asyncpg.Pool) -> dict:
+    """Classify the current market regime using SPY 200-day SMA and VIX.
+
+    Returns dict with keys: trend (bull/bear/sideways), volatility (low/elevated/high),
+    vix (float|None), spy_vs_200d_pct (float|None).
+    """
+    result = {"trend": "sideways", "volatility": "elevated", "vix": None, "spy_vs_200d_pct": None}
+    try:
+        spy_rows = await tsdb.fetch(
+            "SELECT close FROM raw_ohlcv WHERE symbol='SPY' AND interval='1d' ORDER BY ts DESC LIMIT 200"
+        )
+        if len(spy_rows) >= 20:
+            closes = [float(r["close"]) for r in spy_rows]
+            current = closes[0]
+            sma200  = sum(closes) / len(closes)
+            pct     = (current - sma200) / sma200 * 100
+            result["spy_vs_200d_pct"] = round(pct, 2)
+            if pct > 2:
+                result["trend"] = "bull"
+            elif pct < -2:
+                result["trend"] = "bear"
+            else:
+                result["trend"] = "sideways"
+
+        vix_row = await tsdb.fetchrow(
+            "SELECT value FROM raw_macro WHERE series_id='VIXCLS' ORDER BY ts DESC LIMIT 1"
+        )
+        if vix_row:
+            vix = float(vix_row["value"])
+            result["vix"] = vix
+            if vix < 18:
+                result["volatility"] = "low"
+            elif vix < 28:
+                result["volatility"] = "elevated"
+            else:
+                result["volatility"] = "high"
+    except Exception as exc:
+        logger.warning("Regime detection failed: %s", exc)
+    return result
 
 
 def _score(feat_dict: dict, direction: str = "up") -> tuple[float, list[dict]]:
@@ -274,10 +326,10 @@ def _conditions_met(feat_dict: dict, conditions: dict) -> bool:
     return True
 
 
-async def _run_backtest(signal: dict, hypothesis: dict, symbol: str, tsdb: asyncpg.Pool, db: asyncpg.Pool) -> dict:
+async def _run_backtest(signal: dict, hypothesis: dict, symbol: str, tsdb: asyncpg.Pool, db: asyncpg.Pool, signal_ts=None) -> dict:
     """Run SignalBacktester against OHLCV history. Returns stats dict with 'passed' key."""
     from .backtester import SignalBacktester
-    bt = await SignalBacktester(tsdb).estimate([signal])
+    bt = await SignalBacktester(tsdb).estimate([signal], signal_ts=signal_ts)
 
     n  = bt["sample_size"]
     wr = bt["win_rate"]
@@ -404,9 +456,17 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         confidence, top_features = _score(feat_dict, direction=sig_direction)
     logger.info("Signal %s: symbol=%s source=%s confidence=%.3f", signal_id[:8], symbol, signal["source"], confidence)
 
-    # 4. Gate: confidence
-    if confidence < CONFIDENCE_THRESHOLD:
-        logger.debug("Confidence %.3f below threshold — dropping", confidence)
+    # 3.5. Market regime — fetched once and used for gating + sizing
+    regime = await _get_market_regime(tsdb)
+    logger.info("Regime: trend=%s vol=%s vix=%s spy_vs_200d=%s%%",
+                regime["trend"], regime["volatility"], regime["vix"], regime["spy_vs_200d_pct"])
+
+    # 4. Gate: confidence (regime-adjusted threshold)
+    threshold = REGIME_THRESHOLD.get((regime["trend"], sig_direction == "down" and "sell" or "buy"),
+                                     CONFIDENCE_THRESHOLD)
+    if confidence < threshold:
+        logger.debug("Confidence %.3f below regime-adjusted threshold %.3f (%s/%s) — dropping",
+                     confidence, threshold, regime["trend"], sig_direction)
         return
 
     # 4.5. Symbol dedup — skip if an opportunity was created for this symbol in the last 15 min
@@ -430,8 +490,8 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         logger.debug("No hypothesis matched — dropping signal %s", signal_id)
         return
 
-    # 6. Backtest
-    bt = await _run_backtest(signal, hypothesis, symbol, tsdb, db)
+    # 6. Backtest (walk-forward: only past setups before this signal's timestamp)
+    bt = await _run_backtest(signal, hypothesis, symbol, tsdb, db, signal_ts=signal.get("created_at"))
     if not bt["passed"]:
         logger.info("Backtest failed for %s: %s", symbol, bt.get("drop_reason"))
         return
@@ -545,14 +605,16 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     )
 
     opp = dict(saved)
-    opp["win_rate"] = bt["win_rate"]
+    opp["win_rate"]            = bt["win_rate"]
+    opp["avg_win_pct"]         = bt.get("avg_win_pct")
+    opp["avg_loss_pct"]        = bt.get("avg_loss_pct")
     opp["backtest_sample_size"] = bt["sample_size"]
 
     # 12. Fan-out — only during market hours (order execution requires open market)
     if not _is_market_open():
         logger.info("Market closed — opportunity saved but not fanned out (symbol=%s)", symbol)
         return
-    await fan_out_to_users(opp, db, redis)
+    await fan_out_to_users(opp, db, redis, regime=regime)
     logger.info(
         "Opportunity created: conf=%.2f action=%s symbol=%s hypothesis=%s",
         confidence, action, symbol, hypothesis.get("name"),

@@ -38,6 +38,7 @@ class FeatureBuilder:
             features.update(await self._poly_features(symbol, ts))
             features.update(await self._news_features(symbol, ts))
             features.update(await self._price_features(symbol, ts))
+            features.update(await self._advanced_features(symbol, ts))
             features.update(await self._options_features(symbol, ts))
             features.update(await self._macro_features(ts))
             return features
@@ -54,11 +55,12 @@ class FeatureBuilder:
                  rsi_14, macd_histogram, atr_14, bb_position, sma_20_slope,
                  vol_ratio_30d, price_change_1d, price_change_5d,
                  put_call_ratio, unusual_sweep_count_4h,
-                 vix_level, wti_crude, us_10y_yield, fed_funds_rate, usd_index,
-                 social_sentiment_z
+                 vix_level, wti_crude, us_10y_yield, fed_funds_rate, usd_index, yield_curve_10_2,
+                 adx_14, bb_width, price_vs_sma50, atr_pct, hv_20, price_vs_52w_high, stoch_k
                ) VALUES (
                  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                 $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
+                 $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,
+                 $27,$28,$29,$30,$31,$32,$33
                ) ON CONFLICT (ts, symbol) DO NOTHING""",
             features["ts"], features["symbol"],
             features.get("poly_yes_price"),
@@ -84,7 +86,14 @@ class FeatureBuilder:
             features.get("us_10y_yield"),
             features.get("fed_funds_rate"),
             features.get("usd_index"),
-            features.get("social_sentiment_z"),
+            features.get("yield_curve_10_2"),
+            features.get("adx_14"),
+            features.get("bb_width"),
+            features.get("price_vs_sma50"),
+            features.get("atr_pct"),
+            features.get("hv_20"),
+            features.get("price_vs_52w_high"),
+            features.get("stoch_k"),
         )
 
     # ── Polymarket ─────────────────────────────────────────────────────────────
@@ -139,7 +148,7 @@ class FeatureBuilder:
 
     async def _price_features(self, symbol: str, ts: datetime) -> dict:
         tech = await self._tsdb.fetchrow(
-            """SELECT rsi_14, macd, macd_signal, atr_14, bb_upper, bb_lower, sma_20
+            """SELECT rsi_14, macd, macd_signal, atr_14, bb_upper, bb_lower, sma_20, sma_50, adx_14
                FROM technicals WHERE symbol=$1 AND interval='1d' AND ts<=$2
                ORDER BY ts DESC LIMIT 1""",
             symbol, ts,
@@ -183,15 +192,74 @@ class FeatureBuilder:
             if sma_prev:
                 sma_slope = (float(tech["sma_20"]) - float(sma_prev)) / float(sma_prev)
 
+        bb_width = None
+        if tech and tech["bb_upper"] and tech["bb_lower"] and tech["sma_20"]:
+            bb_width = (float(tech["bb_upper"]) - float(tech["bb_lower"])) / float(tech["sma_20"])
+
+        price_vs_sma50 = None
+        if tech and tech["sma_50"] and price_now:
+            price_vs_sma50 = (float(price_now) / float(tech["sma_50"])) - 1
+
+        atr_pct = None
+        if tech and tech["atr_14"] and price_now:
+            atr_pct = float(tech["atr_14"]) / float(price_now)
+
         return {
             "rsi_14":         _f(tech["rsi_14"]) if tech else None,
             "macd_histogram": _diff(tech["macd"], tech["macd_signal"]) if tech else None,
             "atr_14":         _f(tech["atr_14"]) if tech else None,
+            "adx_14":         _f(tech["adx_14"]) if tech else None,
             "bb_position":    bb_pos,
+            "bb_width":       bb_width,
             "sma_20_slope":   sma_slope,
+            "price_vs_sma50": price_vs_sma50,
+            "atr_pct":        atr_pct,
             "vol_ratio_30d":  (float(vol_now) / float(vol_30d)) if vol_now and vol_30d else None,
             "price_change_1d": _pct_change(price_now, price_1d),
             "price_change_5d": _pct_change(price_now, price_5d),
+        }
+
+    # ── Advanced price features ────────────────────────────────────────────────
+
+    async def _advanced_features(self, symbol: str, ts: datetime) -> dict:
+        rows = await self._tsdb.fetch(
+            """SELECT close, high, low FROM raw_ohlcv
+               WHERE symbol=$1 AND interval='1d' AND ts<=$2
+               ORDER BY ts DESC LIMIT 252""",
+            symbol, ts,
+        )
+        closes = [float(r["close"]) for r in rows if r["close"] is not None]
+        highs  = [float(r["high"])  for r in rows if r["high"]  is not None]
+        lows   = [float(r["low"])   for r in rows if r["low"]   is not None]
+
+        # 20-day historical (realized) volatility, annualized
+        hv_20 = None
+        if len(closes) >= 21:
+            import math
+            log_rets = [math.log(closes[i] / closes[i + 1]) for i in range(20)]
+            mean_r = sum(log_rets) / len(log_rets)
+            variance = sum((r - mean_r) ** 2 for r in log_rets) / (len(log_rets) - 1)
+            hv_20 = round(math.sqrt(variance * 252), 6)
+
+        # Distance from 52-week high (0 = at peak, -0.2 = 20% below)
+        price_vs_52w_high = None
+        if closes and len(highs) >= 1:
+            high_52w = max(highs[:252])
+            if high_52w > 0:
+                price_vs_52w_high = round((closes[0] / high_52w) - 1, 6)
+
+        # Stochastic %K (14-period): rows are newest-first
+        stoch_k = None
+        if len(closes) >= 14 and len(highs) >= 14 and len(lows) >= 14:
+            high_14 = max(highs[:14])
+            low_14  = min(lows[:14])
+            if high_14 > low_14:
+                stoch_k = round((closes[0] - low_14) / (high_14 - low_14) * 100, 2)
+
+        return {
+            "hv_20":            hv_20,
+            "price_vs_52w_high": price_vs_52w_high,
+            "stoch_k":          stoch_k,
         }
 
     # ── Options ────────────────────────────────────────────────────────────────
@@ -225,12 +293,16 @@ class FeatureBuilder:
             )
             return _f(val)
 
+        dgs10 = await latest("DGS10")
+        dgs2  = await latest("DGS2")
+        yield_curve = (dgs10 - dgs2) if dgs10 is not None and dgs2 is not None else None
         return {
-            "vix_level":     await latest("VIXCLS"),
-            "wti_crude":     await latest("DCOILWTICO"),
-            "us_10y_yield":  await latest("DGS10"),
-            "fed_funds_rate": await latest("FEDFUNDS"),
-            "usd_index":     await latest("DTWEXBGS"),
+            "vix_level":        await latest("VIXCLS"),
+            "wti_crude":        await latest("DCOILWTICO"),
+            "us_10y_yield":     dgs10,
+            "fed_funds_rate":   await latest("FEDFUNDS"),
+            "usd_index":        await latest("DTWEXBGS"),
+            "yield_curve_10_2": yield_curve,
         }
 
 

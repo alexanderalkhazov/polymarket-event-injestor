@@ -20,6 +20,7 @@ FRED_SERIES = {
     "VIXCLS":    "VIX volatility index",
     "DCOILWTICO": "WTI crude oil",
     "DGS10":     "US 10-year Treasury yield",
+    "DGS2":      "US 2-year Treasury yield",
     "FEDFUNDS":  "Federal funds rate",
     "DTWEXBGS":  "USD broad index",
 }
@@ -105,6 +106,18 @@ async def ingest_ohlcv(symbols: list[str], tsdb: asyncpg.Connection, backfill: b
             df["bb_upper"] = bb_mid + 2 * bb_std
             df["bb_lower"] = bb_mid - 2 * bb_std
 
+            # ADX-14 (Wilder's smoothed Average Directional Index)
+            dh = df["High"].diff()
+            dl = -df["Low"].diff()
+            dm_plus  = dh.where((dh > dl) & (dh > 0), 0.0)
+            dm_minus = dl.where((dl > dh) & (dl > 0), 0.0)
+            sm_tr    = tr.ewm(alpha=1/14, adjust=False).mean()
+            di_plus  = dm_plus.ewm(alpha=1/14, adjust=False).mean() / sm_tr.replace(0, float("nan")) * 100
+            di_minus = dm_minus.ewm(alpha=1/14, adjust=False).mean() / sm_tr.replace(0, float("nan")) * 100
+            dx_denom = (di_plus + di_minus).replace(0, float("nan"))
+            dx       = ((di_plus - di_minus).abs() / dx_denom) * 100
+            df["adx_14"] = dx.ewm(alpha=1/14, adjust=False).mean()
+
             tech_rows = []
             for idx, row in df.iterrows():
                 ts = pd.Timestamp(idx).to_pydatetime()
@@ -120,7 +133,7 @@ async def ingest_ohlcv(symbols: list[str], tsdb: asyncpg.Connection, backfill: b
                     _f(row.get("ema_12")), _f(row.get("ema_26")),
                     _f(row.get("macd")), _f(row.get("macd_signal")),
                     _f(row.get("atr_14")), _f(row.get("bb_upper")), _f(row.get("bb_lower")),
-                    None,  # adx_14 — skipped for now
+                    _f(row.get("adx_14")),
                 ))
 
             if tech_rows:
@@ -129,7 +142,9 @@ async def ingest_ohlcv(symbols: list[str], tsdb: asyncpg.Connection, backfill: b
                        (ts, symbol, interval, rsi_14, sma_20, sma_50, ema_12, ema_26,
                         macd, macd_signal, atr_14, bb_upper, bb_lower, adx_14)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-                       ON CONFLICT (ts, symbol, interval) DO NOTHING""",
+                       ON CONFLICT (ts, symbol, interval) DO UPDATE
+                         SET adx_14 = EXCLUDED.adx_14
+                         WHERE technicals.adx_14 IS NULL""",
                     tech_rows,
                 )
                 logger.info("technicals: %d rows for %s", len(tech_rows), symbol)

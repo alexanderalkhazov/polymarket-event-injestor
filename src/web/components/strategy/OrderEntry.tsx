@@ -96,12 +96,14 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
   const [atr, setAtr]               = useState<number | null>(null)
   const [loadingData, setLoadingData] = useState(true)
 
-  const [orderType, setOrderType] = useState<"market" | "limit">("market")
-  const [limitPts, setLimitPts]   = useState<number>(0)   // offset from quote for limit
-  const [slPts, setSlPts]         = useState<number>(1.0)
-  const [tpPts, setTpPts]         = useState<number>(2.0)
-  const [slEnabled, setSlEnabled] = useState(true)
-  const [tpEnabled, setTpEnabled] = useState(true)
+  const [orderType, setOrderType]   = useState<"market" | "limit">("market")
+  const [limitPts, setLimitPts]     = useState<number>(0)
+  const [slMode, setSlMode]         = useState<"fixed" | "trailing">("fixed")
+  const [slPts, setSlPts]           = useState<number>(1.0)
+  const [trailPct, setTrailPct]     = useState<number>(1.5)
+  const [tpPts, setTpPts]           = useState<number>(2.0)
+  const [slEnabled, setSlEnabled]   = useState(true)
+  const [tpEnabled, setTpEnabled]   = useState(true)
 
   // Hold-to-execute
   const [holdPct, setHoldPct]       = useState(0)
@@ -165,8 +167,14 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body: Record<string, any> = { strategy_id: s.id, confirmed: true, order_type: orderType }
       if (orderType === "limit" && entryPrice) body.limit_price = entryPrice
-      if (slEnabled && slPrice)               body.stop_loss_price   = slPrice
-      if (tpEnabled && tpPrice)               body.take_profit_price = tpPrice
+      if (slEnabled) {
+        if (slMode === "trailing") {
+          body.trail_percent = trailPct
+        } else if (slPrice) {
+          body.stop_loss_price = slPrice
+        }
+      }
+      if (tpEnabled && tpPrice && slMode !== "trailing") body.take_profit_price = tpPrice
 
       const res = await fetch("/api/trades", {
         method: "POST",
@@ -346,13 +354,37 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
             </div>
             {slEnabled ? (
               <>
-                <PtsStepper value={slPts} onChange={setSlPts} color="var(--red)" />
-                <div style={{ marginTop: 6, fontSize: 11, color: "var(--dim)" }}>
-                  {atrMultSl && <span style={{ color: "var(--muted)" }}>{atrMultSl}× ATR · </span>}
-                  <span style={{ color: "var(--red)", fontFamily: "var(--font-dm-mono)" }}>
-                    closes at {slPrice != null ? `$${slPrice.toFixed(2)}` : "—"}
-                  </span>
+                <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+                  {(["fixed", "trailing"] as const).map((m) => (
+                    <button key={m} onClick={() => setSlMode(m)} style={{
+                      background: slMode === m ? "rgba(220,38,38,0.18)" : "var(--bg3)",
+                      border: `1px solid ${slMode === m ? "rgba(220,38,38,0.4)" : "var(--border)"}`,
+                      borderRadius: 6, padding: "3px 10px",
+                      fontSize: 11, fontWeight: slMode === m ? 700 : 400,
+                      color: slMode === m ? "var(--red)" : "var(--dim)",
+                      cursor: "pointer", textTransform: "capitalize",
+                    }}>{m}</button>
+                  ))}
                 </div>
+                {slMode === "fixed" ? (
+                  <>
+                    <PtsStepper value={slPts} onChange={setSlPts} color="var(--red)" />
+                    <div style={{ marginTop: 6, fontSize: 11, color: "var(--dim)" }}>
+                      {atrMultSl && <span style={{ color: "var(--muted)" }}>{atrMultSl}× ATR · </span>}
+                      <span style={{ color: "var(--red)", fontFamily: "var(--font-dm-mono)" }}>
+                        closes at {slPrice != null ? `$${slPrice.toFixed(2)}` : "—"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <PtsStepper value={trailPct} onChange={setTrailPct} color="var(--amber)" min={0.25} />
+                    <div style={{ marginTop: 6, fontSize: 11, color: "var(--dim)" }}>
+                      trails {trailPct}% below peak price
+                      <span style={{ color: "var(--amber)", marginLeft: 6 }}>· TP disabled</span>
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               <span style={{ fontSize: 12, color: "var(--amber)" }}>⚠ No downside protection</span>
@@ -363,6 +395,8 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
           <div style={{
             background: "var(--bg2)", border: "1px solid var(--border)",
             borderRadius: 10, padding: "10px 12px",
+            opacity: slMode === "trailing" ? 0.4 : 1,
+            pointerEvents: slMode === "trailing" ? "none" : undefined,
           }}>
             <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
               <div>

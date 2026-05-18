@@ -114,9 +114,16 @@ CREATE TABLE features (
   us_10y_yield              NUMERIC,
   fed_funds_rate            NUMERIC,
   usd_index                 NUMERIC,
+  yield_curve_10_2          NUMERIC,  -- 10Y minus 2Y Treasury spread; negative = inverted
 
-  -- Social features (placeholder)
-  social_sentiment_z        NUMERIC,
+  -- Advanced technical features
+  adx_14                    NUMERIC,  -- Average Directional Index: >25 = strong trend
+  bb_width                  NUMERIC,  -- Bollinger Band width / SMA20: low = squeeze
+  price_vs_sma50            NUMERIC,  -- (price/SMA50) - 1: positive above, negative below
+  atr_pct                   NUMERIC,  -- ATR14 / price: normalized volatility
+  hv_20                     NUMERIC,  -- 20-day realized (historical) volatility, annualized
+  price_vs_52w_high         NUMERIC,  -- (price / 52w_high) - 1: 0=at peak, -0.2=20% below
+  stoch_k                   NUMERIC,  -- Stochastic %K (14-period): <20 oversold, >80 overbought
 
   -- Outcome labels (filled nightly for rows >= hold_days old)
   forward_return_1d         NUMERIC,

@@ -14,8 +14,12 @@ class SignalBacktester:
     def __init__(self, tsdb_pool) -> None:
         self.tsdb = tsdb_pool
 
-    async def estimate(self, signals: list[dict]) -> dict:
-        """Return statistical estimates for this signal cluster. Never gates or blocks."""
+    async def estimate(self, signals: list[dict], signal_ts=None) -> dict:
+        """Return statistical estimates for this signal cluster. Never gates or blocks.
+
+        signal_ts: if provided, only historical setups BEFORE this date are used
+                   (walk-forward — prevents lookahead bias).
+        """
         # Prefer real stock tickers (news/analytics) over polymarket hex IDs
         ticker_signals = [s for s in signals if s["source"] in ("news", "analytics")]
         symbol = ticker_signals[0]["symbol"] if ticker_signals else signals[0]["symbol"]
@@ -26,6 +30,14 @@ class SignalBacktester:
         entry_dates = await self._find_similar_setups(signals, ohlcv)
         if not entry_dates:
             return self._empty(symbol, signals, "no similar setups found")
+
+        # Walk-forward: discard setups that happened after the signal date
+        if signal_ts is not None:
+            import pandas as pd
+            cutoff = pd.Timestamp(signal_ts).tz_localize(None) if getattr(signal_ts, "tzinfo", None) else pd.Timestamp(signal_ts)
+            entry_dates = [d for d in entry_dates if pd.Timestamp(d).tz_localize(None) < cutoff]
+            if not entry_dates:
+                return self._empty(symbol, signals, "no prior setups before signal date")
 
         # Find the holding period with the best Sharpe
         best_returns, holding_period = self._best_holding_period(ohlcv, entry_dates)
@@ -58,6 +70,8 @@ class SignalBacktester:
             "expected_drawdown": round(max_dd, 5),
             "avg_return_pct": round(avg_ret * 100, 2),
             "median_return_pct": round(med_ret * 100, 2),
+            "avg_win_pct": round(avg_win * 100, 2),    # for Kelly numerator
+            "avg_loss_pct": round(avg_loss * 100, 2),  # for Kelly denominator (negative)
             "expectancy": round(expect * 100, 2),
             "sharpe": round(sharpe, 2),
             "max_drawdown_pct": round(max_dd * 100, 2),
@@ -145,6 +159,39 @@ class SignalBacktester:
             elif s["type"] == "options_unusual":
                 avg30 = ohlcv["volume"].rolling(30).mean()
                 sub = ohlcv["volume"] > 1.5 * avg30
+                matched_any = True
+            elif s["type"] == "adx_trend":
+                # ADX > 25: strong trend bars (using Wilder's smoothed TR / DI)
+                high, low, close = ohlcv["high"], ohlcv["low"], ohlcv["close"]
+                tr = pd.concat([
+                    high - low,
+                    (high - close.shift()).abs(),
+                    (low  - close.shift()).abs(),
+                ], axis=1).max(axis=1)
+                dh = high.diff()
+                dl = -low.diff()
+                dm_plus  = dh.where((dh > dl) & (dh > 0), 0.0)
+                dm_minus = dl.where((dl > dh) & (dl > 0), 0.0)
+                atr14    = tr.ewm(alpha=1/14, adjust=False).mean()
+                di_plus  = dm_plus.ewm(alpha=1/14, adjust=False).mean() / atr14 * 100
+                di_minus = dm_minus.ewm(alpha=1/14, adjust=False).mean() / atr14 * 100
+                dx  = ((di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, float("nan"))) * 100
+                adx = dx.ewm(alpha=1/14, adjust=False).mean()
+                sub = adx > 25
+                matched_any = True
+            elif s["type"] == "bb_squeeze":
+                # BB width below 25th percentile: price coiling before a move
+                sma20  = ohlcv["close"].rolling(20).mean()
+                std20  = ohlcv["close"].rolling(20).std()
+                bb_w   = (4 * std20) / sma20.replace(0, float("nan"))
+                threshold = bb_w.rolling(min(252, len(bb_w))).quantile(0.25)
+                sub = bb_w < threshold
+                matched_any = True
+            elif s["type"] == "stochastic_extreme":
+                high14 = ohlcv["high"].rolling(14).max()
+                low14  = ohlcv["low"].rolling(14).min()
+                stoch  = (ohlcv["close"] - low14) / (high14 - low14).replace(0, float("nan")) * 100
+                sub = stoch < 20 if s.get("direction") != "up" else stoch > 80
                 matched_any = True
             mask |= sub
         if not matched_any:
