@@ -163,6 +163,17 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  sec-producer:
+    build:
+      context: .
+      dockerfile: src/event_detectors/sec_producer/Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── Python consumers ─────────────────────────────────────────────────────────
   polymarket-consumer:
     build:
@@ -210,6 +221,21 @@ services:
       postgres:
         condition: service_healthy
       timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sec-consumer:
+    build:
+      context: .
+      dockerfile: src/event_processors/sec_consumer/Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy

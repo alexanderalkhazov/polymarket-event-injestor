@@ -150,6 +150,19 @@ CREATE TABLE trades (
   filled_at        TIMESTAMPTZ
 );
 
+-- Upcoming earnings events fetched nightly from Finnhub.
+-- Used by the correlator for the earnings guard and for generating IV-setup signals.
+CREATE TABLE IF NOT EXISTS earnings_calendar (
+  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  symbol           TEXT NOT NULL,
+  earnings_date    DATE NOT NULL,
+  eps_estimate     NUMERIC,
+  revenue_estimate NUMERIC,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (symbol, earnings_date)
+);
+CREATE INDEX IF NOT EXISTS earnings_calendar_symbol_date ON earnings_calendar (symbol, earnings_date);
+
 CREATE TABLE positions (
   id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

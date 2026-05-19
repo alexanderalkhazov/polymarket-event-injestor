@@ -4,4 +4,6 @@ numpy>=1.26
 yfinance>=0.2.40
 fredapi>=0.5
 schedule>=1.2
+httpx>=0.27
+redis[asyncio]>=5.0
 python-dotenv>=1.0.0

@@ -120,7 +120,19 @@ def _monte_carlo_risk(strategies: list[dict], n: int = MONTE_CARLO_N) -> dict:
     }
 
 
-async def _portfolio_beta(user_id, new_tickers: list[str], new_sz: float, db) -> float:
+async def _get_beta(ticker: str, redis) -> float:
+    """Live 60-day OLS beta from Redis (written nightly by historical ingestor).
+    Falls back to the hardcoded BETA_MAP when the nightly job hasn't run yet."""
+    try:
+        val = await redis.get(f"beta:{ticker}")
+        if val:
+            return float(val)
+    except Exception:
+        pass
+    return BETA_MAP.get(ticker, 1.0)
+
+
+async def _portfolio_beta(user_id, new_tickers: list[str], new_sz: float, db, redis) -> float:
     """Total portfolio beta if the proposed position is added."""
     rows = await db.fetch(
         """SELECT o.tickers, s.sizing_pct FROM strategies s
@@ -130,13 +142,12 @@ async def _portfolio_beta(user_id, new_tickers: list[str], new_sz: float, db) ->
              AND s.expires_at > NOW()""",
         user_id,
     )
-    total = sum(
-        BETA_MAP.get(t, 1.0) * float(row["sizing_pct"] or 0)
-        for row in rows
-        for t in (row["tickers"] or [])
-    )
+    total = 0.0
+    for row in rows:
+        for t in (row["tickers"] or []):
+            total += await _get_beta(t, redis) * float(row["sizing_pct"] or 0)
     for t in new_tickers:
-        total += BETA_MAP.get(t, 1.0) * new_sz
+        total += await _get_beta(t, redis) * new_sz
     return round(total, 4)
 
 
@@ -259,7 +270,7 @@ async def fan_out_to_users(opp: dict, db, redis, regime: dict | None = None) -> 
 
         # ── Gate 4: portfolio beta cap ────────────────────────────────────────
         if primary_ticker:
-            port_beta = await _portfolio_beta(user_id, tickers, pct, db)
+            port_beta = await _portfolio_beta(user_id, tickers, pct, db, redis)
             if port_beta > MAX_PORTFOLIO_BETA:
                 logger.info(
                     "User %s: beta %.2f would exceed %.2f — skipping",

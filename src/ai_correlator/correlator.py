@@ -315,7 +315,31 @@ def _is_market_open() -> bool:
     return 9 * 60 + 30 <= total_min < 16 * 60
 
 
-def _is_near_earnings(symbol: str) -> bool:
+async def _is_near_earnings(symbol: str, db: asyncpg.Pool) -> bool:
+    """Check earnings_calendar table (populated nightly by historical ingestor).
+
+    Falls back to a yfinance call when the table has no entry for this symbol
+    so the guard still works on the first day before the nightly job runs.
+    """
+    try:
+        row = await db.fetchrow(
+            """SELECT earnings_date FROM earnings_calendar
+               WHERE symbol=$1
+                 AND earnings_date BETWEEN CURRENT_DATE AND CURRENT_DATE + $2
+               LIMIT 1""",
+            symbol, timedelta(days=EARNINGS_GUARD_DAYS),
+        )
+        if row is not None:
+            return True
+        # Table has no upcoming entry — either no earnings or table is empty.
+        # If the table has any rows at all, trust it (no earnings).
+        count = await db.fetchval("SELECT COUNT(*) FROM earnings_calendar")
+        if count and count > 0:
+            return False
+    except Exception:
+        pass
+
+    # Table empty or DB error — fall back to yfinance (slow but safe)
     try:
         import yfinance as yf
         cal = yf.Ticker(symbol).calendar
@@ -637,6 +661,20 @@ async def run() -> None:
 
     asyncio.create_task(_refresh_labeled_count())
 
+    async def _log_drift_warning() -> None:
+        while True:
+            try:
+                if await redis.exists("model_drift_detected"):
+                    logger.warning(
+                        "Feature drift detected — model distribution shifted since last train. "
+                        "Predictions may be less reliable. Check ml-trainer logs."
+                    )
+            except Exception:
+                pass
+            await asyncio.sleep(3600)
+
+    asyncio.create_task(_log_drift_warning())
+
     pubsub = redis.pubsub()
     await pubsub.subscribe("new_signal")
     logger.info("AI correlator subscribed to new_signal")
@@ -737,7 +775,7 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
             return
 
     # 4.6. Earnings guard
-    if signal["source"] != "polymarket" and _is_near_earnings(symbol):
+    if signal["source"] != "polymarket" and await _is_near_earnings(symbol, db):
         logger.info("Earnings within %d days for %s — skipping", EARNINGS_GUARD_DAYS, symbol)
         return
 

@@ -9,11 +9,14 @@ import time
 
 import asyncpg
 import pandas as pd
+import redis.asyncio as aioredis
 import schedule
 import yfinance as yf
 from fredapi import Fred
 
 logger = logging.getLogger(__name__)
+
+BETA_TTL = 172_800  # 2 days — recomputed nightly
 
 # FRED series IDs used by the feature store
 FRED_SERIES = {
@@ -160,6 +163,107 @@ async def ingest_ohlcv(symbols: list[str], tsdb: asyncpg.Connection, backfill: b
             logger.error("OHLCV ingest failed for %s: %s", symbol, exc)
 
 
+async def compute_betas(tsdb: asyncpg.Connection) -> None:
+    """Compute rolling 60-day OLS betas vs SPY and write to Redis."""
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+    r = aioredis.from_url(redis_url)
+    try:
+        spy_rows = await tsdb.fetch(
+            "SELECT ts, close FROM raw_ohlcv WHERE symbol='SPY' AND interval='1d' "
+            "ORDER BY ts DESC LIMIT 90"
+        )
+        if len(spy_rows) < 20:
+            logger.warning("Not enough SPY rows for beta computation")
+            return
+        spy_closes = pd.Series({row["ts"]: float(row["close"]) for row in spy_rows}).sort_index()
+        spy_ret = spy_closes.pct_change().dropna()
+
+        betas: dict[str, float] = {"SPY": 1.0}
+        for symbol in _symbols():
+            if symbol == "SPY":
+                continue
+            rows = await tsdb.fetch(
+                "SELECT ts, close FROM raw_ohlcv WHERE symbol=$1 AND interval='1d' "
+                "ORDER BY ts DESC LIMIT 90",
+                symbol,
+            )
+            if len(rows) < 20:
+                continue
+            closes = pd.Series({row["ts"]: float(row["close"]) for row in rows}).sort_index()
+            ret = closes.pct_change().dropna()
+            aligned = pd.DataFrame({"sym": ret, "spy": spy_ret}).dropna()
+            if len(aligned) < 20:
+                continue
+            cov = aligned["sym"].cov(aligned["spy"])
+            var = aligned["spy"].var()
+            betas[symbol] = round(cov / var, 4) if var > 0 else 1.0
+
+        async with r.pipeline() as pipe:
+            for sym, beta in betas.items():
+                pipe.set(f"beta:{sym}", str(beta), ex=BETA_TTL)
+            await pipe.execute()
+
+        logger.info("Beta computation complete: %d symbols written to Redis", len(betas))
+    except Exception as exc:
+        logger.error("Beta computation failed: %s", exc)
+    finally:
+        await r.aclose()
+
+
+async def ingest_earnings(db_url: str, symbols: list[str]) -> None:
+    """Fetch 30-day earnings calendar from Finnhub, store in earnings_calendar table."""
+    import httpx
+    from datetime import date, timedelta
+
+    finnhub_key = os.getenv("FINNHUB_API_KEY", "")
+    if not finnhub_key:
+        logger.warning("FINNHUB_API_KEY not set — skipping earnings ingest")
+        return
+
+    today = date.today()
+    end   = today + timedelta(days=30)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://finnhub.io/api/v1/calendar/earnings",
+                params={"from": today.isoformat(), "to": end.isoformat(), "token": finnhub_key},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.error("Finnhub earnings fetch failed: %s", exc)
+        return
+
+    ticker_set = {s.upper() for s in symbols}
+    entries = data.get("earningsCalendar", [])
+    conn = await asyncpg.connect(db_url)
+    try:
+        rows = []
+        for e in entries:
+            sym = (e.get("symbol") or "").upper()
+            ed  = e.get("date")
+            if sym not in ticker_set or not ed:
+                continue
+            try:
+                from datetime import date as dt_date
+                rows.append((sym, dt_date.fromisoformat(ed),
+                             e.get("epsEstimate"), e.get("revenueEstimate")))
+            except ValueError:
+                continue
+        if rows:
+            await conn.executemany(
+                """INSERT INTO earnings_calendar (symbol, earnings_date, eps_estimate, revenue_estimate)
+                   VALUES ($1, $2, $3, $4)
+                   ON CONFLICT (symbol, earnings_date) DO NOTHING""",
+                rows,
+            )
+            logger.info("earnings_calendar: %d upcoming events stored", len(rows))
+    except Exception as exc:
+        logger.error("Earnings DB write failed: %s", exc)
+    finally:
+        await conn.close()
+
+
 async def ingest_macro(tsdb: asyncpg.Connection) -> None:
     fred_key = os.getenv("FRED_API_KEY", "")
     if not fred_key:
@@ -192,6 +296,7 @@ async def _is_fresh_db(conn: asyncpg.Connection) -> bool:
 
 async def run_once(backfill: bool = False) -> None:
     timescale_url = os.environ["TIMESCALE_URL"]
+    database_url  = os.environ["DATABASE_URL"]
     symbols = _symbols()
 
     conn = await asyncpg.connect(timescale_url)
@@ -203,8 +308,11 @@ async def run_once(backfill: bool = False) -> None:
         logger.info("Starting ingest: %d symbols, backfill=%s", len(symbols), backfill)
         await ingest_ohlcv(symbols, conn, backfill)
         await ingest_macro(conn)
+        await compute_betas(conn)
     finally:
         await conn.close()
+
+    await ingest_earnings(database_url, symbols)
     logger.info("Historical ingest complete")
 
 

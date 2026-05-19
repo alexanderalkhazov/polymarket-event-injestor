@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import pickle
 import sys
@@ -32,6 +33,7 @@ import numpy as np
 import pandas as pd
 import shap
 import xgboost as xgb
+from scipy.stats import ks_2samp
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (
     average_precision_score,
@@ -188,9 +190,60 @@ def _save_model(
         print(f"     {feat:<42} {imp:.4f}")
 
 
+def check_feature_drift(X: pd.DataFrame) -> int:
+    """KS test: compare training distribution to reference saved at last train.
+
+    Returns number of features with statistically significant drift (p < 0.01).
+    Saves a new reference file after every training run.
+    """
+    ref_path = MODEL_DIR / "reference_features.json"
+    drifted = 0
+    if ref_path.exists():
+        with open(ref_path) as f:
+            ref = json.load(f)
+        for col in FEATURE_COLS:
+            if col not in ref or col not in X.columns:
+                continue
+            ref_vals = ref[col]
+            cur_vals = X[col].dropna().tolist()
+            if len(ref_vals) < 20 or len(cur_vals) < 20:
+                continue
+            _, p = ks_2samp(ref_vals, cur_vals)
+            if p < 0.01:
+                drifted += 1
+                print(f"   DRIFT detected: {col} (p={p:.4f})")
+    # Save current distribution as reference for next run
+    ref_new = {col: X[col].dropna().tolist() for col in FEATURE_COLS if col in X.columns}
+    with open(ref_path, "w") as f:
+        json.dump(ref_new, f)
+    return drifted
+
+
 def train(df: pd.DataFrame) -> None:
     # asyncpg returns NUMERIC as Decimal — cast everything to float64
     X = df[FEATURE_COLS].apply(pd.to_numeric, errors="coerce").fillna(0).astype(float)
+
+    # ── Feature drift check ──────────────────────────────────────────────────
+    drifted = check_feature_drift(X)
+    if drifted >= 5:
+        print(f"\n   WARNING: {drifted} features show significant distribution shift vs last train.")
+        print("   Model predictions may be unreliable until the regime stabilises.")
+        # Write drift flag to Redis so the correlator can log a warning
+        try:
+            import redis as syncredis
+            r = syncredis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"))
+            r.set("model_drift_detected", "1", ex=86400)
+            r.close()
+        except Exception:
+            pass
+    else:
+        try:
+            import redis as syncredis
+            r = syncredis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"))
+            r.delete("model_drift_detected")
+            r.close()
+        except Exception:
+            pass
 
     # ── Long model: did buying work? ─────────────────────────────────────────
     y_long          = (df["forward_return_5d"] > 0.03).astype(int)

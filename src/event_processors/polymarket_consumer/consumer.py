@@ -167,11 +167,10 @@ class PolymarketConsumer:
         if liquidity < MIN_LIQUIDITY:
             return
 
-        # Per-market cooldown
+        # Per-market cooldown check (but don't set it yet — streak must pass first)
         now_ts = time.time()
         if now_ts - self._last_signal_ts.get(market_id, 0) < MARKET_COOLDOWN_S:
             return
-        self._last_signal_ts[market_id] = now_ts
 
         question = raw.get("question", "")
         question_lower = question.lower()
@@ -193,6 +192,7 @@ class PolymarketConsumer:
 
         # Conviction velocity: require 2+ consecutive same-direction moves to filter
         # single-tick noise. A genuine shift sustains its direction across polls.
+        # Cooldown is set AFTER this check — a failed streak must not eat the window.
         yes_direction = "up" if yes_price > prev else "down"
         if state.last_direction == yes_direction:
             state.direction_streak += 1
@@ -202,6 +202,9 @@ class PolymarketConsumer:
 
         if state.direction_streak < 2:
             return
+
+        # All gates passed — lock this market out for MARKET_COOLDOWN_S
+        self._last_signal_ts[market_id] = now_ts
 
         signal_id = str(uuid.uuid4())
         payload = {
