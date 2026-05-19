@@ -103,6 +103,26 @@ services:
       - postgres
       - timescale
 
+  # ── Cold-start initializer (runs once, blocks dependents until done) ─────────
+  # Checks each step and skips if already populated — safe to re-run.
+  # Step 1: 10-year OHLCV + macro backfill   (if raw_ohlcv < 1000 rows)
+  # Step 2: Labeled feature rows              (if features < 200 labeled rows)
+  # Step 3: Train XGBoost long + short models (if scoring_model.json missing)
+  data-init:
+    build:
+      context: .
+      dockerfile: src/data_init/Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    environment:
+      DEV_MODE: "false"
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      timescale:
+        condition: service_healthy
+    restart: on-failure
+
   # ── Python producers ─────────────────────────────────────────────────────────
   polymarket-producer:
     build:
@@ -207,6 +227,8 @@ services:
         condition: service_healthy
       timescale:
         condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # ── Historical ingestor (nightly OHLCV + FRED macro) ────────────────────────
@@ -219,6 +241,8 @@ services:
     depends_on:
       timescale:
         condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
     restart: on-failure
 
   # ── ML model retrainer (hourly check, retrains when MIN_TRAIN_SAMPLES reached) ─
@@ -233,6 +257,8 @@ services:
     depends_on:
       timescale:
         condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # ── AI correlator ────────────────────────────────────────────────────────────
@@ -251,6 +277,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # ── Frontend (Next.js App Router — UI + BFF in one) ─────────────────────────

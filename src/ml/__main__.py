@@ -18,7 +18,7 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-MIN_SAMPLES        = int(os.getenv("MIN_TRAIN_SAMPLES", "200"))
+MIN_SAMPLES        = int(os.getenv("MIN_TRAIN_SAMPLES", "50"))
 RETRAIN_INTERVAL_H = int(os.getenv("RETRAIN_INTERVAL_H", "24"))
 MODEL_DIR          = Path(os.getenv("MODEL_DIR", "/app/models"))
 FLAG_FILE          = MODEL_DIR / ".last_trained"

@@ -48,6 +48,8 @@ def _score_conviction(
 @dataclass
 class MarketState:
     last_yes_price: Optional[float] = None
+    last_direction: Optional[str] = None
+    direction_streak: int = 0
 
 
 class PolymarketConsumer:
@@ -189,11 +191,17 @@ class PolymarketConsumer:
             logger.debug("No ticker mapping for market %s — skipping signal", market_id[:16])
             return
 
-        # Correct direction: rising YES on "recession" = bearish equities (sell),
-        # but rising YES on "bitcoin hits $100k" = bullish (buy).
-        # We can't perfectly infer this here, so we store the raw yes_price direction
-        # and let the correlator + Claude interpret it with the question context.
+        # Conviction velocity: require 2+ consecutive same-direction moves to filter
+        # single-tick noise. A genuine shift sustains its direction across polls.
         yes_direction = "up" if yes_price > prev else "down"
+        if state.last_direction == yes_direction:
+            state.direction_streak += 1
+        else:
+            state.direction_streak = 1
+            state.last_direction = yes_direction
+
+        if state.direction_streak < 2:
+            return
 
         signal_id = str(uuid.uuid4())
         payload = {

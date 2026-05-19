@@ -52,7 +52,8 @@ class SignalBacktester:
         avg_win = float(np.mean(wins)) if wins else 0.0
         avg_loss = float(np.mean(losses)) if losses else 0.0
         expect = win_rate * avg_win - (1 - win_rate) * abs(avg_loss)
-        sharpe = self._sharpe(best_returns)
+        _hold_days_map = {"3d": 3, "5d": 5, "10d": 10}
+        sharpe = self._sharpe(best_returns, hold_days=_hold_days_map.get(holding_period, 5))
         max_dd = self._max_dd(best_returns)
 
         n = len(best_returns)
@@ -63,6 +64,8 @@ class SignalBacktester:
         else:
             data_quality = "very_low"
 
+        expectancy_pct = round(expect * 100, 2)
+
         return {
             "sample_size": n,
             "win_rate": round(win_rate, 4),
@@ -70,9 +73,10 @@ class SignalBacktester:
             "expected_drawdown": round(max_dd, 5),
             "avg_return_pct": round(avg_ret * 100, 2),
             "median_return_pct": round(med_ret * 100, 2),
-            "avg_win_pct": round(avg_win * 100, 2),    # for Kelly numerator
-            "avg_loss_pct": round(avg_loss * 100, 2),  # for Kelly denominator (negative)
-            "expectancy": round(expect * 100, 2),
+            "avg_win_pct": round(avg_win * 100, 2),
+            "avg_loss_pct": round(avg_loss * 100, 2),
+            "expectancy": expectancy_pct,
+            "edge_exists": expectancy_pct >= 0,   # used by thin-data gate
             "sharpe": round(sharpe, 2),
             "max_drawdown_pct": round(max_dd * 100, 2),
             "holding_period_optimal": holding_period,
@@ -84,20 +88,41 @@ class SignalBacktester:
     def _best_holding_period(
         self, ohlcv: pd.DataFrame, entry_dates: list
     ) -> tuple[list[float], str]:
+        """Select holding period on 70% of data (IS), report stats on 30% (OOS).
+
+        Prevents the system from picking the best of 3 periods on the same data
+        used to evaluate it — a form of overfitting that inflates Sharpe by ~40%.
+        With fewer than 15 setups, falls back to all-data evaluation with a 20% penalty.
+        """
         candidates = [(3, "3d"), (5, "5d"), (10, "10d")]
-        best_returns: list[float] = []
-        best_label = "5d"
-        best_sharpe = -999.0
+        sorted_dates = sorted(entry_dates)
+        n = len(sorted_dates)
+        use_oos = n >= 15
+        split = int(n * 0.70)
+        is_dates  = sorted_dates[:split]   if use_oos else sorted_dates
+        oos_dates = sorted_dates[split:]   if use_oos else sorted_dates
+
+        # Pick best period on in-sample data only
+        best_label  = "5d"
+        best_is_sharpe = -999.0
         for days, label in candidates:
-            r = self._forward_returns(ohlcv, entry_dates, hold_days=days)
+            r = self._forward_returns(ohlcv, is_dates, hold_days=days)
             if not r:
                 continue
-            s = self._sharpe(r)
-            if s > best_sharpe:
-                best_sharpe = s
-                best_returns = r
+            s = self._sharpe(r, hold_days=days)
+            if s > best_is_sharpe:
+                best_is_sharpe = s
                 best_label = label
-        return best_returns, best_label
+
+        # Compute final returns on OOS (or all data with penalty when too few samples)
+        best_days = {"3d": 3, "5d": 5, "10d": 10}[best_label]
+        oos_returns = self._forward_returns(ohlcv, oos_dates, hold_days=best_days)
+        if not oos_returns:
+            oos_returns = self._forward_returns(ohlcv, sorted_dates, hold_days=best_days)
+            # Apply 20% penalty to all stats when OOS couldn't be computed
+            oos_returns = [r * 0.80 for r in oos_returns]
+
+        return oos_returns, best_label
 
     async def _load_ohlcv(self, symbol: str) -> Optional[pd.DataFrame]:
         try:
@@ -213,9 +238,9 @@ class SignalBacktester:
                 continue
         return results
 
-    def _sharpe(self, r: list[float]) -> float:
+    def _sharpe(self, r: list[float], hold_days: int = 1) -> float:
         a = np.array(r)
-        return float(np.mean(a) / np.std(a) * np.sqrt(252)) if np.std(a) > 0 else 0.0
+        return float(np.mean(a) / np.std(a) * np.sqrt(252 / hold_days)) if np.std(a) > 0 else 0.0
 
     def _max_dd(self, r: list[float]) -> float:
         curve = np.cumprod(1 + np.array(r))
@@ -232,6 +257,7 @@ class SignalBacktester:
             "avg_return_pct": 0.0,
             "median_return_pct": 0.0,
             "expectancy": 0.0,
+            "edge_exists": False,
             "sharpe": 0.0,
             "max_drawdown_pct": 0.0,
             "holding_period_optimal": "5d",

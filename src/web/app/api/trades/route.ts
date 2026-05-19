@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { getAlpaca } from "@/lib/alpaca"
+import { getRedis } from "@/lib/redis"
 
 const MAX_POSITIONS       = parseInt(process.env.MAX_POSITIONS       ?? "5")
 const DAILY_LOSS_LIMIT    = parseFloat(process.env.DAILY_LOSS_LIMIT  ?? "0.03")
@@ -21,31 +22,69 @@ export async function POST(req: Request) {
   const body = await req.json()
   const userId = (session.user as { id?: string }).id
 
-  // ── Close an open position ────────────────────────────────────────────────
-  if (body.action === "close_position") {
-    const { symbol, qty } = body
-    if (!symbol) return Response.json({ error: "symbol required" }, { status: 400 })
+  // ── Cancel a pending order ────────────────────────────────────────────────
+  if (body.action === "cancel_order") {
+    const { alpaca_order_id } = body
+    if (!alpaca_order_id) return Response.json({ error: "alpaca_order_id required" }, { status: 400 })
     const userRes = await db.query("SELECT * FROM users WHERE id=$1", [userId])
     const user = userRes.rows[0]
     if (!user?.alpaca_key_id || !user?.alpaca_secret)
       return Response.json({ error: "Alpaca not connected" }, { status: 422 })
     const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
-    const order = await alpaca.createOrder({
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (alpaca as any).cancelOrder(alpaca_order_id)
+    } catch (err: unknown) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const msg = (err as any)?.response?.data?.message ?? (err as any)?.message ?? "Cancel failed"
+      return Response.json({ error: msg }, { status: 422 })
+    }
+    await db.query(
+      "UPDATE trades SET status='cancelled' WHERE alpaca_order_id=$1 AND user_id=$2",
+      [alpaca_order_id, userId],
+    )
+    return Response.json({ cancelled: true })
+  }
+
+  // ── Position management actions ───────────────────────────────────────────
+  if (body.action === "close_position" || body.action === "sell_partial" || body.action === "add_to_position") {
+    const { symbol, qty, order_type, limit_price } = body
+    if (!symbol) return Response.json({ error: "symbol required" }, { status: 400 })
+    if (body.action !== "close_position" && (!qty || qty <= 0))
+      return Response.json({ error: "qty required" }, { status: 400 })
+
+    const userRes = await db.query("SELECT * FROM users WHERE id=$1", [userId])
+    const user = userRes.rows[0]
+    if (!user?.alpaca_key_id || !user?.alpaca_secret)
+      return Response.json({ error: "Alpaca not connected" }, { status: 422 })
+
+    if (!user.is_paper && !isMarketOpen())
+      return Response.json({ error: "Market is closed" }, { status: 422 })
+
+    const alpaca = getAlpaca(user.is_paper, user.alpaca_key_id, user.alpaca_secret)
+    const side   = body.action === "add_to_position" ? "buy" : "sell"
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orderParams: Record<string, any> = {
       symbol,
-      qty: qty ? qty.toString() : undefined,
-      side: "sell",
-      type: "market",
-      time_in_force: "day",
-    })
+      qty:             qty ? qty.toString() : undefined,
+      side,
+      type:            order_type === "limit" ? "limit" : "market",
+      time_in_force:   "day",
+    }
+    if (order_type === "limit" && limit_price)
+      orderParams.limit_price = Number(limit_price).toFixed(2)
+
+    const order = await alpaca.createOrder(orderParams)
     await db.query(
       `INSERT INTO trades (user_id, alpaca_order_id, symbol, side, qty, status, is_paper)
-       VALUES ($1,$2,$3,'sell',$4,'submitted',$5)`,
-      [userId, order.id, symbol, parseFloat(order.qty ?? qty ?? "0"), user.is_paper],
+       VALUES ($1,$2,$3,$4,$5,'submitted',$6)`,
+      [userId, order.id, symbol, side, parseFloat(order.qty ?? qty?.toString() ?? "0"), user.is_paper],
     )
     return Response.json({ order_id: order.id, symbol, qty: order.qty })
   }
 
-  const { strategy_id, confirmed, order_type, limit_price, stop_loss_price, take_profit_price, trail_percent } = body
+  const { strategy_id, confirmed, order_type, limit_price, stop_loss_price, take_profit_price, trail_percent, leverage, extended_hours } = body
   if (!confirmed)
     return Response.json({ error: "explicit confirmation required" }, { status: 400 })
 
@@ -92,41 +131,74 @@ export async function POST(req: Request) {
     if (dailyReturn <= -DAILY_LOSS_LIMIT)
       return Response.json({ error: `Daily loss limit reached (${(dailyReturn * 100).toFixed(1)}% today). Trading paused to protect capital.` }, { status: 422 })
   }
-  const sizing = strat.sizing_usd ?? equity * strat.sizing_pct
+  const leverageMult = Math.min(Math.max(parseInt(leverage ?? "1"), 1), 4)
+  const sizing = (strat.sizing_usd ?? equity * strat.sizing_pct) * leverageMult
   const symbol = strat.tickers[0]
+
+  // Fetch price: prefer ask from latest quote, fall back to last trade price
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const quote = await alpaca.getLatestQuote(symbol) as any
-  const price = parseFloat(quote.ap ?? quote.AskPrice ?? quote.ask_price ?? "0")
+  let price = 0
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const quote = await alpaca.getLatestQuote(symbol) as any
+    price = parseFloat(quote.AskPrice ?? quote.ap ?? quote.ask_price ?? "0") || 0
+  } catch { /* fall through to trade price */ }
+  if (price <= 0) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const trade = await (alpaca as any).getLatestTrade(symbol) as any
+      price = parseFloat(trade.Price ?? trade.price ?? "0") || 0
+    } catch { /* leave price as 0 */ }
+  }
+  if (price <= 0)
+    return Response.json({ error: `Unable to get current price for ${symbol}. Market may be closed or data unavailable.` }, { status: 422 })
+
   const qty = Math.floor(sizing / price)
 
-  if (qty < 1)
+  if (!isFinite(qty) || qty < 1)
     return Response.json({ error: "position too small for account size" }, { status: 422 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // Extended hours requires limit orders and day time_in_force
+  const isExtended = extended_hours === true
+  const effectiveType = isExtended ? "limit" : (order_type === "limit" ? "limit" : "market")
   const orderParams: Record<string, any> = {
     symbol,
     qty: qty.toString(),
     side: strat.action === "sell" ? "sell" : "buy",
-    type: order_type === "limit" ? "limit" : "market",
+    type: effectiveType,
     time_in_force: "day",
+    ...(isExtended ? { extended_hours: true } : {}),
   }
-  if (order_type === "limit" && limit_price) {
-    orderParams.limit_price = Number(limit_price).toFixed(2)
+  if (effectiveType === "limit") {
+    const lp = limit_price ?? price
+    orderParams.limit_price = Number(lp).toFixed(2)
   }
+  const isBuy = strat.action !== "sell"
   if (trail_percent) {
-    // Trailing stop — submits as a separate attached order; incompatible with bracket
-    orderParams.order_class  = "oto"   // one-triggers-other
-    orderParams.stop_loss    = { trail_percent: Number(trail_percent).toFixed(2) }
-  } else if (stop_loss_price || take_profit_price) {
-    orderParams.order_class = "bracket"
-    if (stop_loss_price) {
-      orderParams.stop_loss = { stop_price: Number(stop_loss_price).toFixed(2) }
-    }
-    if (take_profit_price) {
-      orderParams.take_profit = { limit_price: Number(take_profit_price).toFixed(2) }
+    orderParams.order_class = "oto"
+    orderParams.stop_loss   = { trail_percent: Number(trail_percent).toFixed(2) }
+  } else {
+    // Validate stop/take against actual price — frontend quote may be stale
+    const slNum = stop_loss_price ? Number(stop_loss_price) : null
+    const tpNum = take_profit_price ? Number(take_profit_price) : null
+    const validSl = slNum && (isBuy ? slNum < price : slNum > price)
+    const validTp = tpNum && (isBuy ? tpNum > price : tpNum < price)
+    if (validSl || validTp) {
+      orderParams.order_class = "bracket"
+      if (validSl) orderParams.stop_loss    = { stop_price:  slNum!.toFixed(2) }
+      if (validTp) orderParams.take_profit  = { limit_price: tpNum!.toFixed(2) }
     }
   }
-  const order = await alpaca.createOrder(orderParams)
+
+  let order: Record<string, unknown>
+  try {
+    order = await alpaca.createOrder(orderParams) as Record<string, unknown>
+  } catch (err: unknown) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const alpacaMsg = (err as any)?.response?.data?.message ?? (err as any)?.message ?? "Order rejected by broker"
+    return Response.json({ error: alpacaMsg }, { status: 422 })
+  }
 
   await db.query(
     `INSERT INTO trades (user_id,strategy_id,alpaca_order_id,symbol,side,qty,status,is_paper)
@@ -156,10 +228,13 @@ export async function GET(req: Request) {
     return Response.json({
       connected: true,
       is_paper: user.is_paper ?? true,
-      equity: parseFloat(account.equity),
-      cash: parseFloat(account.cash),
-      buying_power: parseFloat(account.buying_power ?? "0"),
-      unrealized_pl: parseFloat(account.unrealized_pl ?? "0"),
+      equity:        parseFloat(account.equity),
+      cash:          parseFloat(account.cash),
+      buying_power:  parseFloat(account.buying_power ?? "0"),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      unrealized_pl: parseFloat((account as any).unrealized_pl ?? "0"),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      last_equity:   parseFloat((account as any).last_equity ?? account.equity),
     })
   }
 
@@ -180,7 +255,7 @@ export async function GET(req: Request) {
       ])
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const q = quote.status === "fulfilled" ? (quote.value as any) : null
-      const price = q ? parseFloat(q.ap ?? q.AskPrice ?? q.ask_price ?? "0") || null : null
+      const price = q ? parseFloat(q.AskPrice ?? q.ap ?? q.ask_price ?? "0") || null : null
       const atrVal = atrRow.status === "fulfilled" ? atrRow.value.rows[0]?.atr_14 : null
       const atr = atrVal ? parseFloat(atrVal) : null
       return Response.json({ price, atr, symbol })
@@ -217,6 +292,40 @@ export async function GET(req: Request) {
             trade.status     = "filled"
             trade.fill_price = fillPrice
             trade.filled_at  = filledAt
+
+            // P&L → SPRT feedback: when a sell (position close) fills, record win/loss
+            // on the parent hypothesis so the SPRT health check stays calibrated.
+            if (trade.side === "sell" && trade.strategy_id && fillPrice) {
+              try {
+                const hypRow = await db.query(
+                  `SELECT o.hypothesis_id, t_buy.fill_price AS entry_price, t_buy.qty
+                   FROM strategies s
+                   JOIN opportunities o ON o.id = s.opportunity_id
+                   LEFT JOIN trades t_buy ON t_buy.strategy_id = s.id
+                     AND t_buy.side = 'buy' AND t_buy.status = 'filled'
+                   WHERE s.id = $1
+                   LIMIT 1`,
+                  [trade.strategy_id]
+                )
+                const hyp = hypRow.rows[0]
+                if (hyp?.hypothesis_id && hyp.entry_price) {
+                  const pnl = (fillPrice - parseFloat(hyp.entry_price)) * parseFloat(hyp.qty ?? "1")
+                  const isWin = pnl > 0
+                  await db.query(
+                    isWin
+                      ? "UPDATE hypotheses SET sprt_wins = sprt_wins + 1 WHERE id=$1"
+                      : "UPDATE hypotheses SET sprt_losses = sprt_losses + 1 WHERE id=$1",
+                    [hyp.hypothesis_id]
+                  )
+                  // Re-entry lockout: block the correlator from re-entering this symbol
+                  // for 2 hours after a loss to avoid catching falling knives.
+                  if (!isWin) {
+                    const redis = getRedis()
+                    await redis.setex(`reentry_lock:${trade.symbol}`, 7200, "1")
+                  }
+                }
+              } catch { /* best-effort — never block the fill response */ }
+            }
           } else if (["cancelled", "expired", "rejected"].includes(order.status)) {
             await db.query("UPDATE trades SET status=$1 WHERE id=$2", [order.status, trade.id])
             trade.status = order.status

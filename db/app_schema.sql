@@ -65,6 +65,9 @@ CREATE TABLE hypotheses (
   confidence_threshold    NUMERIC NOT NULL DEFAULT 0.65,
   is_active               BOOLEAN NOT NULL DEFAULT TRUE,
   version                 INT NOT NULL DEFAULT 1,
+  -- SPRT health tracking: updated nightly by ai-correlator background task
+  sprt_wins               INT NOT NULL DEFAULT 0,
+  sprt_losses             INT NOT NULL DEFAULT 0,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -105,10 +108,11 @@ CREATE TABLE opportunities (
   expected_return_pct NUMERIC,
   hold_days           INT,
   stop_loss_pct       NUMERIC,
-  top_features        JSONB,
-  macro_snapshot      JSONB,
-  embedding           vector(1536),
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  top_features            JSONB,
+  macro_snapshot          JSONB,
+  holding_period_optimal  TEXT,           -- "3d" | "5d" | "10d" from backtest
+  embedding               vector(1536),
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX opportunities_embedding_idx ON opportunities
   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
@@ -210,3 +214,8 @@ BEGIN
   );
 END;
 $$;
+
+-- ── Migration helpers (run manually if upgrading an existing DB) ─────────────
+-- ALTER TABLE hypotheses ADD COLUMN IF NOT EXISTS sprt_wins    INT NOT NULL DEFAULT 0;
+-- ALTER TABLE hypotheses ADD COLUMN IF NOT EXISTS sprt_losses  INT NOT NULL DEFAULT 0;
+-- ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS holding_period_optimal TEXT;

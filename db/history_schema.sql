@@ -187,8 +187,8 @@ SELECT add_retention_policy('raw_news',       INTERVAL '30 days');
 SELECT add_retention_policy('raw_polymarket', INTERVAL '30 days');
 SELECT add_retention_policy('raw_options',    INTERVAL '30 days');
 
--- Feature store: 90 days is plenty for ML training windows
-SELECT add_retention_policy('features', INTERVAL '90 days');
+-- Feature store: 2 years — model needs long-term patterns; 90 days is too narrow
+SELECT add_retention_policy('features', INTERVAL '730 days');
 
 -- Long-lived reference data: 10 years for backtesting
 SELECT add_retention_policy('raw_ohlcv',   INTERVAL '10 years');

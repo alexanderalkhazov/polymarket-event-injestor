@@ -2,6 +2,7 @@
 
 import useSWR from "swr"
 import Link from "next/link"
+import type { LiveAccount } from "@/hooks/useTradesStream"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -9,7 +10,11 @@ function fmt(n: number) {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+function StatCard({
+  label, value, sub, color,
+}: {
+  label: string; value: string; sub?: string; color?: string
+}) {
   return (
     <div style={{
       background: "var(--bg1)", borderRadius: 14,
@@ -28,10 +33,35 @@ function StatCard({ label, value, sub, color }: { label: string; value: string; 
   )
 }
 
-export function AccountSummary() {
-  const { data, isLoading } = useSWR("/api/trades?type=account", fetcher, { refreshInterval: 30000 })
+interface AccountSummaryProps {
+  /** Live data from SSE stream. When provided, SWR polling is skipped. */
+  liveAccount?: LiveAccount | null
+  liveConnected?: boolean
+}
 
-  if (isLoading) {
+export function AccountSummary({ liveAccount, liveConnected }: AccountSummaryProps) {
+  // Only poll when SSE is not providing data
+  const { data: swrData, isLoading } = useSWR(
+    liveAccount == null ? "/api/trades?type=account" : null,
+    fetcher,
+    { refreshInterval: 30000 },
+  )
+
+  const data = liveAccount != null
+    ? {
+        connected: liveConnected ?? true,
+        is_paper: true,
+        equity: liveAccount.equity,
+        cash: liveAccount.cash,
+        buying_power: liveAccount.buying_power,
+        unrealized_pl: liveAccount.unrealized_pl,
+        last_equity: liveAccount.last_equity,
+      }
+    : swrData
+
+  const loading = liveAccount == null && isLoading
+
+  if (loading) {
     return (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16, padding: "20px 28px 0", flexShrink: 0 }}>
         {[1, 2, 3, 4, 5].map((i) => (
@@ -79,11 +109,14 @@ export function AccountSummary() {
     )
   }
 
-  const equity = data.equity ?? 0
-  const cash = data.cash ?? 0
+  const equity      = data.equity ?? 0
+  const cash        = data.cash ?? 0
   const buyingPower = data.buying_power ?? 0
-  const pl = data.unrealized_pl ?? 0
-  const plPct = equity > 0 ? (pl / (equity - pl)) * 100 : 0
+  const pl          = data.unrealized_pl ?? 0
+  // Daily return: how much the account moved since yesterday's close
+  const lastEquity  = data.last_equity ?? equity
+  const dailyPl     = equity - lastEquity
+  const dailyPct    = lastEquity > 0 ? (dailyPl / lastEquity) * 100 : 0
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16, padding: "20px 28px 0", flexShrink: 0 }}>
@@ -93,12 +126,14 @@ export function AccountSummary() {
       <StatCard
         label="Unrealized P/L"
         value={`${pl >= 0 ? "+" : "−"}$${fmt(Math.abs(pl))}`}
-        color={pl >= 0 ? "var(--green)" : "var(--red)"}
+        sub={pl !== 0 ? "open positions" : "no open positions"}
+        color={pl !== 0 ? (pl >= 0 ? "var(--green)" : "var(--red)") : undefined}
       />
       <StatCard
-        label="Return"
-        value={`${plPct >= 0 ? "+" : ""}${plPct.toFixed(2)}%`}
-        color={plPct >= 0 ? "var(--green)" : "var(--red)"}
+        label="Today's Return"
+        value={`${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%`}
+        sub={`${dailyPl >= 0 ? "+" : "−"}$${fmt(Math.abs(dailyPl))} vs yesterday`}
+        color={dailyPl >= 0 ? "var(--green)" : "var(--red)"}
       />
     </div>
   )

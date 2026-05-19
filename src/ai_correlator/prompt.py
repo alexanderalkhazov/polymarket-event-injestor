@@ -80,9 +80,11 @@ HYPOTHESIS: {hypothesis['name']}
 PREDICTION:
   Symbol: {signal['symbol']}
   Model confidence: {confidence:.0%}
-  Historical win rate: {bt['win_rate']:.0%} over {bt['sample_size']} occurrences
-  Avg return: {bt['avg_return_pct']:.2f}% over {hypothesis.get('hold_days', 5)} days
-  Expectancy: {bt['expectancy']:.2f}% per trade
+  Raw win rate: {bt['win_rate']:.0%} | Bayesian (conservative) win rate: see expectancy
+  Sample size: {bt['sample_size']} historical occurrences
+  Avg return: {bt['avg_return_pct']:.2f}% | Holding period: {bt.get('holding_period_optimal','5d')}
+  Expectancy: {bt['expectancy']:.2f}% per trade | Sharpe: {bt.get('sharpe', 0):.2f}
+  Data quality: {bt.get('data_quality','unknown')}
 
 TOP FEATURES DRIVING MODEL SCORE (SHAP values):
 {top_feat_str}
@@ -101,16 +103,18 @@ Use it to add nuance: if recession probability is elevated, that's a material ri
 equities. If Fed cut probability is high, that tailwinds bond trades. Reference specific
 probabilities by name (e.g. "recession odds at 45%") when they are directly relevant.
 
-Write exactly these four fields. Keep each tight.
+Write exactly these five fields. Keep each tight.
 - summary: one sentence, plain English, no jargon, no numbers except the symbol
 - thesis: two to three sentences explaining what signals aligned and why they matter together; weave in Polymarket context where relevant
 - risk_note: one sentence on the main thing that could invalidate this setup; include Polymarket-derived risks if significant (e.g. high recession odds)
 - historical_note: one sentence referencing a similar past opportunity if found, else null
+- confidence_note: if sample_size < 20 OR data_quality is "low" or "very_low", write one sentence noting the limited historical sample (e.g. "Only 14 historical precedents — treat sizing and win rate with caution."); otherwise null
 
 Respond ONLY in valid JSON, no preamble, no markdown:
 {{
   "summary": "...",
   "thesis": "...",
   "risk_note": "...",
-  "historical_note": "..." or null
+  "historical_note": "..." or null,
+  "confidence_note": "..." or null
 }}"""

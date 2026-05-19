@@ -96,8 +96,10 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
   const [atr, setAtr]               = useState<number | null>(null)
   const [loadingData, setLoadingData] = useState(true)
 
-  const [orderType, setOrderType]   = useState<"market" | "limit">("market")
-  const [limitPts, setLimitPts]     = useState<number>(0)
+  const [orderType, setOrderType]       = useState<"market" | "limit">("market")
+  const [limitPrice, setLimitPrice]     = useState<string>("")
+  const [extendedHours, setExtendedHours] = useState(false)
+  const [leverage, setLeverage]         = useState<1 | 2 | 4>(1)
   const [slMode, setSlMode]         = useState<"fixed" | "trailing">("fixed")
   const [slPts, setSlPts]           = useState<number>(1.0)
   const [trailPct, setTrailPct]     = useState<number>(1.5)
@@ -140,9 +142,9 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker])
 
-  // Derived prices from pts
-  const entryPrice    = orderType === "limit" && quotePrice
-    ? parseFloat((quotePrice + (isBuy ? -limitPts : limitPts)).toFixed(2))
+  // Derived entry price: limit uses direct dollar input, market uses quote
+  const entryPrice = orderType === "limit" && limitPrice
+    ? parseFloat(limitPrice) || quotePrice
     : quotePrice
   const slPrice = entryPrice != null
     ? parseFloat((isBuy ? entryPrice - slPts : entryPrice + slPts).toFixed(2))
@@ -152,7 +154,7 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
     : null
 
   const equity        = account?.equity ?? 0
-  const positionSize  = equity * sizingPct
+  const positionSize  = equity * sizingPct * leverage
   const qty           = entryPrice && entryPrice > 0 ? Math.floor(positionSize / entryPrice) : null
   const maxLoss       = qty && slEnabled ? slPts * qty : null
   const rr            = slPts > 0 ? tpPts / slPts : null
@@ -165,7 +167,7 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
     setSubmitting(true)
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body: Record<string, any> = { strategy_id: s.id, confirmed: true, order_type: orderType }
+      const body: Record<string, any> = { strategy_id: s.id, confirmed: true, order_type: extendedHours ? "limit" : orderType, leverage, ...(extendedHours ? { extended_hours: true } : {}) }
       if (orderType === "limit" && entryPrice) body.limit_price = entryPrice
       if (slEnabled) {
         if (slMode === "trailing") {
@@ -273,48 +275,111 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
 
       {/* Order type row */}
       <div style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: orderType === "limit" ? 8 : 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: orderType === "limit" || extendedHours ? 8 : 0 }}>
           <Label>Order Type</Label>
           <div style={{ display: "flex", gap: 4 }}>
             {(["market", "limit"] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => setOrderType(t)}
+                onClick={() => { setOrderType(t); if (t === "market") setExtendedHours(false) }}
                 title={t === "market" ? "Execute immediately at the current best price." : "Set a specific price — order only fills if the market reaches it."}
                 style={{
-                  background: orderType === t ? "var(--primary)" : "var(--bg2)",
-                  border: `1px solid ${orderType === t ? "var(--primary)" : "var(--border)"}`,
+                  background: (extendedHours ? "limit" : orderType) === t ? "var(--primary)" : "var(--bg2)",
+                  border: `1px solid ${(extendedHours ? "limit" : orderType) === t ? "var(--primary)" : "var(--border)"}`,
                   borderRadius: 7, padding: "5px 12px",
-                  fontSize: 12, fontWeight: orderType === t ? 600 : 400,
-                  color: orderType === t ? "#fff" : "var(--muted)",
+                  fontSize: 12, fontWeight: (extendedHours ? "limit" : orderType) === t ? 600 : 400,
+                  color: (extendedHours ? "limit" : orderType) === t ? "#fff" : "var(--muted)",
                   cursor: "pointer", textTransform: "capitalize",
+                  opacity: extendedHours && t === "market" ? 0.4 : 1,
                 }}
               >
                 {t}
               </button>
             ))}
           </div>
+          {/* Extended hours toggle */}
+          <button
+            onClick={() => { setExtendedHours(!extendedHours); if (!extendedHours) setOrderType("limit") }}
+            title="Trade pre-market (4–9:30 AM ET) and after-hours (4–8 PM ET). Limit orders only."
+            style={{
+              background: extendedHours ? "rgba(245,158,11,0.15)" : "var(--bg2)",
+              border: `1px solid ${extendedHours ? "rgba(245,158,11,0.5)" : "var(--border)"}`,
+              borderRadius: 7, padding: "5px 10px",
+              fontSize: 11, fontWeight: extendedHours ? 700 : 400,
+              color: extendedHours ? "var(--amber)" : "var(--dim)",
+              cursor: "pointer",
+            }}
+          >
+            {extendedHours ? "⏰ Ext hrs ON" : "Ext hrs"}
+          </button>
           <span style={{ fontSize: 11, color: "var(--dim)" }}>
-            {orderType === "market"
-              ? "Fills instantly at best available price"
-              : "Only fills if market reaches your price"}
+            {extendedHours
+              ? "Pre/after-market · limit only · wider spreads"
+              : orderType === "market"
+                ? "Fills instantly at best available price"
+                : "Only fills if market reaches your price"}
           </span>
         </div>
-        {orderType === "limit" && quotePrice && (
+        {orderType === "limit" && (
           <div style={{
-            display: "flex", alignItems: "center", gap: 8,
+            display: "flex", alignItems: "center", gap: 10,
             background: "var(--bg2)", border: "1px solid var(--border)",
             borderRadius: 8, padding: "8px 12px",
           }}>
-            <span style={{ fontSize: 11, color: "var(--dim)" }}>
-              Buy below market by
-            </span>
-            <PtsStepper value={limitPts} onChange={setLimitPts} color="var(--text)" min={0} />
-            <span style={{ fontSize: 11, color: "var(--dim)" }}>
-              → limit price <Mono size={12}>${entryPrice?.toFixed(2)}</Mono>
-            </span>
+            <span style={{ fontSize: 11, color: "var(--dim)" }}>Limit price (USD)</span>
+            <input
+              type="number"
+              step="0.01"
+              value={limitPrice}
+              onChange={(e) => setLimitPrice(e.target.value)}
+              placeholder={quotePrice ? quotePrice.toFixed(2) : "0.00"}
+              style={{
+                width: 100, background: "var(--bg)", border: "1px solid var(--border)",
+                borderRadius: 7, padding: "5px 9px",
+                fontFamily: "var(--font-dm-mono)", fontSize: 13, fontWeight: 600,
+                color: "var(--text)", outline: "none",
+              }}
+            />
+            {quotePrice && limitPrice && (
+              <span style={{ fontSize: 11, color: "var(--dim)" }}>
+                {parseFloat(limitPrice) < quotePrice
+                  ? `$${(quotePrice - parseFloat(limitPrice)).toFixed(2)} below market`
+                  : `$${(parseFloat(limitPrice) - quotePrice).toFixed(2)} above market`}
+              </span>
+            )}
           </div>
         )}
+      </div>
+
+      {/* Leverage selector */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Label>Leverage</Label>
+          <div style={{ display: "flex", gap: 4 }}>
+            {([1, 2, 4] as const).map((x) => (
+              <button
+                key={x}
+                onClick={() => setLeverage(x)}
+                title={x === 1 ? "No margin — cash only" : x === 2 ? "2× margin (overnight eligible)" : "4× margin (intraday only)"}
+                style={{
+                  background: leverage === x ? "rgba(124,58,237,0.18)" : "var(--bg2)",
+                  border: `1px solid ${leverage === x ? "rgba(124,58,237,0.5)" : "var(--border)"}`,
+                  borderRadius: 7, padding: "5px 14px",
+                  fontSize: 12, fontWeight: leverage === x ? 700 : 400,
+                  color: leverage === x ? "#a78bfa" : "var(--muted)",
+                  cursor: "pointer",
+                }}
+              >
+                {x}×
+              </button>
+            ))}
+          </div>
+          {leverage > 1 && (
+            <span style={{ fontSize: 11, color: "var(--amber)" }}>
+              ⚠ {leverage}× amplifies losses — requires margin account
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Stop loss + Take profit */}
@@ -451,8 +516,8 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
           },
           {
             label: "ALLOC", value: equity > 0 ? `$${Math.round(positionSize).toLocaleString()}` : "—",
-            hint: "Capital deployed",
-            tooltip: "Total dollars allocated based on your risk level setting.",
+            hint: leverage > 1 ? `${leverage}× leveraged` : "Capital deployed",
+            tooltip: "Total dollars allocated based on your risk level setting × leverage multiplier.",
           },
           {
             label: "MAX LOSS", value: maxLoss ? `$${maxLoss.toFixed(0)}` : "—", color: "var(--red)" as const,

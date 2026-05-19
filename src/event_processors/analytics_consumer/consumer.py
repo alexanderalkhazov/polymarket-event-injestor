@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 
+import time
+
 import asyncpg
 import redis.asyncio as aioredis
 from confluent_kafka import Consumer, KafkaError
@@ -17,12 +19,17 @@ logger = logging.getLogger(__name__)
 COOLDOWN_HOURS = 4
 MIN_SIGNAL_SCORE = 0.15
 
+# Fallback absolute thresholds — used when no per-symbol baseline is available
 VOLUME_SPIKE_RATIO = 1.8
 PRICE_MOVE_PCT = 4.0
 RSI_OVERBOUGHT = 72.0
 RSI_OVERSOLD = 28.0
 PC_RATIO_HIGH = 2.5
 PC_RATIO_LOW = 0.40
+
+# Z-score threshold for normalized signal gating (top ~5% of distribution)
+Z_SCORE_THRESHOLD = 1.65
+BASELINE_CACHE_TTL = 3600  # refresh per-symbol baselines hourly
 
 
 def _score_volume(ratio: float) -> Tuple[float, str, list]:
@@ -70,6 +77,7 @@ class AnalyticsConsumer:
         self._timescale_url = timescale_url
         self._redis_url = redis_url
         self._cooldowns: Dict[Tuple[str, str], datetime] = {}
+        self._baselines: Dict[str, tuple] = {}  # ticker → (expiry_ts, data)
         self._pool: Optional[asyncpg.Pool] = None
         self._tsdb: Optional[asyncpg.Pool] = None
         self._redis: Optional[aioredis.Redis] = None
@@ -84,6 +92,37 @@ class AnalyticsConsumer:
             timescale_url=os.environ["TIMESCALE_URL"],
             redis_url=os.getenv("REDIS_URL", "redis://redis:6379"),
         )
+
+    async def _get_baselines(self, ticker: str) -> dict:
+        """Return per-symbol 60d mean/std for vol_ratio and price_change, cached 1h."""
+        now = time.monotonic()
+        if ticker in self._baselines:
+            expiry, data = self._baselines[ticker]
+            if now < expiry:
+                return data
+        data: dict = {}
+        try:
+            row = await self._tsdb.fetchrow(
+                """SELECT
+                     AVG(vol_ratio_30d)    AS vol_mean,
+                     STDDEV(vol_ratio_30d) AS vol_std,
+                     AVG(price_change_1d)  AS pch_mean,
+                     STDDEV(price_change_1d) AS pch_std
+                   FROM features
+                   WHERE symbol=$1 AND ts > NOW() - INTERVAL '60 days'""",
+                ticker,
+            )
+            if row and row["vol_std"] and float(row["vol_std"]) > 0:
+                data = {
+                    "vol_mean": float(row["vol_mean"] or 1.0),
+                    "vol_std":  float(row["vol_std"]),
+                    "pch_mean": float(row["pch_mean"] or 0.0),
+                    "pch_std":  float(row["pch_std"]  or 2.0),
+                }
+        except Exception as exc:
+            logger.debug("Baseline load failed for %s: %s", ticker, exc)
+        self._baselines[ticker] = (now + BASELINE_CACHE_TTL, data)
+        return data
 
     def _in_cooldown(self, ticker: str, signal_type: str) -> bool:
         last = self._cooldowns.get((ticker, signal_type))
@@ -170,6 +209,9 @@ class AnalyticsConsumer:
         # Signal detection
         signals: List[Tuple[str, float, str, list, Optional[str]]] = []
 
+        # Load per-symbol 60d baselines for Z-score normalized thresholds
+        baselines = await self._get_baselines(ticker)
+
         # Price change is used for both momentum signal and volume-spike direction
         chg = raw.get("price_change_1d_pct")
 
@@ -177,20 +219,31 @@ class AnalyticsConsumer:
         avg_vol = raw.get("avg_volume_30d")
         if cur_vol and avg_vol and avg_vol > 0:
             ratio = cur_vol / avg_vol
-            if ratio >= VOLUME_SPIKE_RATIO and not self._in_cooldown(ticker, "volume_spike"):
+            # Use Z-score gate when baseline available, else fall back to absolute threshold
+            if baselines:
+                vol_z = (ratio - baselines["vol_mean"]) / baselines["vol_std"]
+                vol_spike = vol_z >= Z_SCORE_THRESHOLD
+            else:
+                vol_spike = ratio >= VOLUME_SPIKE_RATIO
+            if vol_spike and not self._in_cooldown(ticker, "volume_spike"):
                 score, urgency, ci = _score_volume(ratio)
                 if score >= MIN_SIGNAL_SCORE:
-                    # Use price direction to classify the volume spike
                     vol_dir = "up" if (chg or 0) >= 0 else "down"
                     signals.append(("volume_spike", score, urgency, ci, vol_dir))
                     self._set_cooldown(ticker, "volume_spike")
 
-        if chg is not None and abs(chg) >= PRICE_MOVE_PCT and not self._in_cooldown(ticker, "momentum"):
-            score, urgency, ci = _score_momentum(chg)
-            if score >= MIN_SIGNAL_SCORE:
-                direction = "up" if chg > 0 else "down"
-                signals.append(("momentum", score, urgency, ci, direction))
-                self._set_cooldown(ticker, "momentum")
+        if chg is not None and not self._in_cooldown(ticker, "momentum"):
+            if baselines and baselines["pch_std"] > 0:
+                pch_z = (abs(chg) - abs(baselines["pch_mean"])) / baselines["pch_std"]
+                momentum_trigger = pch_z >= Z_SCORE_THRESHOLD
+            else:
+                momentum_trigger = abs(chg) >= PRICE_MOVE_PCT
+            if momentum_trigger:
+                score, urgency, ci = _score_momentum(chg)
+                if score >= MIN_SIGNAL_SCORE:
+                    direction = "up" if chg > 0 else "down"
+                    signals.append(("momentum", score, urgency, ci, direction))
+                    self._set_cooldown(ticker, "momentum")
 
         rsi = raw.get("rsi_14")
         if rsi is not None and not self._in_cooldown(ticker, "rsi_extreme"):

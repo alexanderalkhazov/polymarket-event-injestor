@@ -26,13 +26,18 @@ FRED_SERIES = {
 }
 
 ALL_SYMBOLS = [
-    "USO", "XOM", "XLE", "LNG",          # oil_energy
-    "SPY", "QQQ", "AAPL", "MSFT", "NVDA", # us_equities
-    "GLD", "SLV", "UNG", "WEAT",          # commodities/rates_macro
+    # US equities
+    "SPY", "QQQ", "IWM",
+    "AAPL", "MSFT", "NVDA", "TSLA", "META", "GOOGL", "AMZN", "AMD", "NFLX",
+    "INTC", "CRM", "PLTR", "COIN",
+    # Energy & commodities
+    "USO", "XOM", "XLE", "LNG",
+    "GLD", "SLV", "UNG", "WEAT",
+    # Rates
     "TLT",
 ]
 
-DEV_SYMBOLS = ["USO", "SPY", "QQQ"]
+DEV_SYMBOLS = ["SPY", "QQQ", "AAPL"]
 
 
 def _symbols() -> list[str]:
