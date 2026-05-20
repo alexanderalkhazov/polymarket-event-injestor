@@ -9,9 +9,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_TICKERS = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "META", "GOOGL",
-    "AMD", "INTC", "NFLX", "COIN", "PLTR", "SOFI", "SPY", "QQQ",
-]
+    # Broad-market index ETFs
+    "SPY", "QQQ", "DIA", "IWM", "VTI", "EEM", "ARKK",
+    # Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA",
+    "AMD", "INTC", "CRM", "NFLX", "PLTR", "COIN",
+    # Finance
+    "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+    # Healthcare
+    "JNJ", "UNH", "LLY", "PFE", "ABBV", "AMGN",
+    # Energy
+    "XOM", "CVX", "XLE", "USO", "UNG", "LNG",
+    # Metals & commodities
+    "GLD", "SLV", "IAU", "GDX", "WEAT", "CORN", "DBA",
+    # Bonds / rates
+    "TLT", "IEF", "SHY", "HYG", "AGG", "TIP",
+    # Crypto (options will be null — handled gracefully)
+    "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD",
+    "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD",
+    "MATIC-USD", "ATOM-USD", "UNI-USD",
+]  # keep in sync with src/config/market_categories.py ALL_SYMBOLS
 
 
 def _env(name: str, default: str = "", required: bool = False) -> str:

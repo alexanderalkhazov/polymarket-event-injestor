@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
@@ -19,15 +20,26 @@ EDGAR_ATOM_URL = (
     "https://www.sec.gov/cgi-bin/browse-edgar"
     "?action=getcurrent&type=8-K&dateb=&owner=include&count=40&search_text=&output=atom"
 )
+EDGAR_FORM4_URL = (
+    "https://www.sec.gov/cgi-bin/browse-edgar"
+    "?action=getcurrent&type=4&dateb=&owner=include&count=40&search_text=&output=atom"
+)
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 EDGAR_HEADERS = {"User-Agent": "EventEdge AI contact@eventedge.ai"}
 
 ATOM_NS = "http://www.w3.org/2005/Atom"
 
 ALL_SYMBOLS: Set[str] = {
-    "SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "TSLA", "META", "GOOGL",
-    "AMZN", "AMD", "NFLX", "INTC", "CRM", "PLTR", "COIN", "USO", "XOM",
-    "XLE", "LNG", "GLD", "SLV", "UNG", "WEAT", "TLT",
+    # Equity-only — crypto doesn't file 8-Ks with the SEC
+    # keep in sync with src/config/market_categories.py EQUITY_SYMBOLS
+    "SPY", "QQQ", "DIA", "IWM", "VTI", "EEM", "ARKK",
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA",
+    "AMD", "INTC", "CRM", "NFLX", "PLTR", "COIN",
+    "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+    "JNJ", "UNH", "LLY", "PFE", "ABBV", "AMGN",
+    "XOM", "CVX", "XLE", "USO", "UNG", "LNG",
+    "GLD", "SLV", "IAU", "GDX", "WEAT", "CORN", "DBA",
+    "TLT", "IEF", "SHY", "HYG", "AGG", "TIP",
 }
 
 # 8-K item scoring: (score, urgency, direction_hint)
@@ -47,7 +59,6 @@ POLL_INTERVAL = 300  # 5 minutes
 
 def _extract_item_numbers(text: str) -> list[str]:
     """Extract 8-K item numbers like '1.01', '2.02' from filing summary text."""
-    import re
     return re.findall(r"\b(\d\.\d{2})\b", text)
 
 
@@ -60,6 +71,71 @@ def _score_filing(item_numbers: list[str]) -> Tuple[float, str, Optional[str]]:
             if candidate[0] > best_score[0]:
                 best_score = candidate
     return best_score
+
+
+def _parse_form4_transactions(xml_text: str) -> Tuple[str, float, float]:
+    """
+    Parse a Form 4 XML document.
+    Returns (dominant_code, total_shares, avg_price).
+    Codes: 'P' open-market purchase, 'S' sale/disposition, 'A' award/grant, 'O' other.
+    """
+    try:
+        root = ET.fromstring(xml_text)
+        purchase_shares = sale_shares = 0.0
+        prices: list[float] = []
+
+        for txn in root.findall(".//nonDerivativeTransaction"):
+            code_el   = txn.find(".//transactionCode")
+            shares_el = txn.find(".//transactionShares/value")
+            price_el  = txn.find(".//transactionPricePerShare/value")
+            if code_el is None or shares_el is None:
+                continue
+            code   = (code_el.text or "").strip()
+            shares = float(shares_el.text or 0)
+            price  = float((price_el.text or "0").strip() or 0) if price_el is not None else 0.0
+            if code == "P":
+                purchase_shares += shares
+                if price > 0:
+                    prices.append(price)
+            elif code in ("S", "D"):
+                sale_shares += shares
+                if price > 0:
+                    prices.append(price)
+
+        avg_price = sum(prices) / len(prices) if prices else 0.0
+        if purchase_shares > 0 and purchase_shares >= sale_shares:
+            return "P", purchase_shares, avg_price
+        if sale_shares > purchase_shares:
+            return "S", sale_shares, avg_price
+
+        for txn in root.findall(".//derivativeTransaction"):
+            code_el = txn.find(".//transactionCode")
+            if code_el is not None and (code_el.text or "").strip() in ("A", "G"):
+                return "A", 0.0, 0.0
+    except ET.ParseError:
+        pass
+    return "O", 0.0, 0.0
+
+
+def _score_form4(code: str, shares: float, price: float) -> Tuple[float, str, Optional[str]]:
+    """
+    Score an insider transaction.
+    Open-market purchases are the primary alpha source — executives rarely buy
+    unless they expect the stock to rise. Sales are mostly tax/diversification noise
+    and only signalled above $5M.
+    """
+    if code == "P":
+        value = shares * price
+        if value >= 1_000_000:
+            return 0.88, "high",   "up"
+        if value >= 100_000:
+            return 0.72, "high",   "up"
+        return 0.55, "medium", "up"
+    if code == "S":
+        value = shares * price
+        if value >= 5_000_000:
+            return 0.55, "medium", "down"
+    return 0.0, "low", None   # awards, small sales — no signal value
 
 
 class SECProducer:
@@ -85,6 +161,9 @@ class SECProducer:
 
     async def run(self) -> None:
         self._http = httpx.AsyncClient(headers=EDGAR_HEADERS, timeout=15.0, follow_redirects=True)
+        # On first poll, ignore filings older than 2× the poll interval so a container
+        # restart doesn't re-publish the last 40 entries to Kafka.
+        self._startup_cutoff = datetime.now(timezone.utc) - timedelta(seconds=self._poll_interval * 2)
         try:
             await self._refresh_ticker_map()
             logger.info("SEC producer started (topic=%s, poll=%ds)", self._kafka_topic, self._poll_interval)
@@ -92,12 +171,140 @@ class SECProducer:
                 try:
                     await self._poll()
                 except Exception as exc:
-                    logger.error("Poll failed: %s", exc)
+                    logger.error("8-K poll failed: %s", exc)
+                try:
+                    await self._poll_form4()
+                except Exception as exc:
+                    logger.error("Form 4 poll failed: %s", exc)
                 await asyncio.sleep(self._poll_interval)
         finally:
             self._producer.flush()
             if self._http:
                 await self._http.aclose()
+
+    async def _get_form4_xml(self, entry_id: str, cik: str) -> Optional[str]:
+        """
+        Fetch the Form 4 XML for a filing.
+        Fetches the filing index page to find the .xml document, then fetches the XML.
+        Returns None on any failure so the caller can mark entry as seen and continue.
+        """
+        m = re.search(r"Archives/edgar/data/\d+/(\d+)/", entry_id)
+        if not m:
+            return None
+        accno_nodash = m.group(1)
+        accno = f"{accno_nodash[:10]}-{accno_nodash[10:12]}-{accno_nodash[12:]}"
+        index_url = (
+            f"https://www.sec.gov/Archives/edgar/data/{cik}/{accno_nodash}/{accno}-index.htm"
+        )
+        try:
+            resp = await self._http.get(index_url)
+            resp.raise_for_status()
+            xml_match = re.search(
+                r'href="(/Archives/edgar/data/[^"]+\.xml)"', resp.text, re.IGNORECASE
+            )
+            if not xml_match:
+                return None
+            xml_url = f"https://www.sec.gov{xml_match.group(1)}"
+            resp2 = await self._http.get(xml_url)
+            resp2.raise_for_status()
+            return resp2.text
+        except Exception as exc:
+            logger.debug("Form 4 XML fetch failed (%s): %s", entry_id[:60], exc)
+            return None
+
+    async def _poll_form4(self) -> None:
+        """Poll EDGAR Form 4 feed and publish open-market purchase/large-sale signals."""
+        await self._refresh_ticker_map()
+
+        resp = await self._http.get(EDGAR_FORM4_URL)
+        resp.raise_for_status()
+
+        root = ET.fromstring(resp.text)
+        entries = root.findall(f"{{{ATOM_NS}}}entry")
+        published_count = 0
+
+        for entry in entries:
+            entry_id = (entry.findtext(f"{{{ATOM_NS}}}id") or "").strip()
+            if not entry_id or entry_id in self._seen_ids:
+                continue
+
+            title   = (entry.findtext(f"{{{ATOM_NS}}}title")   or "").strip()
+            updated = (entry.findtext(f"{{{ATOM_NS}}}updated")  or "").strip()
+            link_el = entry.find(f"{{{ATOM_NS}}}link")
+            filing_url = link_el.get("href", "") if link_el is not None else ""
+
+            # Skip stale entries on startup (same anti-flood logic as 8-K)
+            if hasattr(self, "_startup_cutoff") and updated:
+                try:
+                    entry_dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                    if entry_dt < self._startup_cutoff:
+                        self._seen_ids.add(entry_id)
+                        continue
+                except ValueError:
+                    pass
+
+            # Form 4 title: "4: COMPANY NAME (CIK) - FILER NAME"
+            cik_match    = re.search(r"\((\d+)\)", title)
+            cik          = cik_match.group(1) if cik_match else ""
+            company_name = re.sub(r"^4:\s*", "", title, flags=re.IGNORECASE)
+            company_name = re.sub(r"\s*\(\d+\).*$", "", company_name).strip()
+
+            ticker = self._resolve_ticker(cik, company_name)
+            if not ticker or ticker not in ALL_SYMBOLS:
+                self._seen_ids.add(entry_id)
+                continue
+
+            # Fetch the filing XML to determine transaction type — 2 HTTP requests
+            xml_text = await self._get_form4_xml(filing_url or entry_id, cik)
+            if xml_text is None:
+                self._seen_ids.add(entry_id)
+                continue
+
+            code, shares, price = _parse_form4_transactions(xml_text)
+            score, urgency, direction = _score_form4(code, shares, price)
+
+            if score < 0.50:   # skip routine sales, grants, small purchases
+                self._seen_ids.add(entry_id)
+                continue
+
+            filed_at = updated or datetime.now(timezone.utc).isoformat()
+            message = {
+                "filing_id":      entry_id,
+                "cik":            cik,
+                "company_name":   company_name,
+                "ticker":         ticker,
+                "form_type":      "4",
+                "item_numbers":   [],
+                "score":          score,
+                "urgency":        urgency,
+                "direction":      direction,
+                "filing_url":     filing_url,
+                "filed_at":       filed_at,
+                "insider_code":   code,
+                "insider_shares": shares,
+                "insider_price":  price,
+                "insider_value":  round(shares * price, 2),
+            }
+            self._producer.produce(
+                topic=self._kafka_topic,
+                key=ticker,
+                value=json.dumps(message).encode(),
+            )
+            self._seen_ids.add(entry_id)
+            published_count += 1
+            logger.info(
+                "Insider %s: %s (%s) shares=%.0f value=$%.0f score=%.2f",
+                code, ticker, company_name, shares, shares * price, score,
+            )
+
+        self._producer.poll(0)
+        if published_count:
+            logger.info("Published %d Form 4 insider signal(s) to %s", published_count, self._kafka_topic)
+        else:
+            logger.debug("No new Form 4 signals for tracked symbols")
+
+        if len(self._seen_ids) > 10_000:
+            self._seen_ids = set(list(self._seen_ids)[-5_000:])
 
     async def _refresh_ticker_map(self) -> None:
         now = time.monotonic()
@@ -155,8 +362,17 @@ class SECProducer:
             summary = (entry.findtext(f"{{{ATOM_NS}}}summary") or "").strip()
             updated = (entry.findtext(f"{{{ATOM_NS}}}updated") or "").strip()
 
+            # Skip entries that predate the startup cutoff (prevents replay on restart)
+            if hasattr(self, "_startup_cutoff") and updated:
+                try:
+                    entry_dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                    if entry_dt < self._startup_cutoff:
+                        self._seen_ids.add(entry_id)
+                        continue
+                except ValueError:
+                    pass
+
             # Extract CIK and company name from the title (format: "company_name (CIK 0000320193)")
-            import re
             cik_match = re.search(r"\(CIK\s+(\d+)\)", title, re.IGNORECASE)
             cik = cik_match.group(1) if cik_match else ""
             company_name = re.sub(r"\s*\(CIK\s+\d+\)\s*", "", title, flags=re.IGNORECASE).strip()

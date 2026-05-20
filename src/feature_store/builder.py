@@ -15,16 +15,30 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-ALL_SYMBOLS = ["USO", "XOM", "SPY", "QQQ", "GLD", "TLT", "LNG", "XLE",
-               "AAPL", "MSFT", "NVDA", "TSLA", "META", "GOOGL", "AMZN",
-               "AMD", "INTC", "NFLX", "COIN", "PLTR"]
-DEV_SYMBOLS  = ["SPY", "QQQ", "USO", "AAPL", "MSFT", "NVDA", "TSLA",
-                "META", "GOOGL", "AMZN", "AMD", "INTC", "NFLX", "COIN", "PLTR"]
+ALL_SYMBOLS = [
+    # Broad-market index ETFs
+    "SPY", "QQQ", "DIA", "IWM", "VTI", "EEM", "ARKK",
+    # Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA",
+    "AMD", "INTC", "CRM", "NFLX", "PLTR", "COIN",
+    # Finance
+    "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+    # Healthcare
+    "JNJ", "UNH", "LLY", "PFE", "ABBV", "AMGN",
+    # Energy
+    "XOM", "CVX", "XLE", "USO", "UNG", "LNG",
+    # Metals & commodities
+    "GLD", "SLV", "IAU", "GDX", "WEAT", "CORN", "DBA",
+    # Bonds / rates
+    "TLT", "IEF", "SHY", "HYG", "AGG", "TIP",
+    # Crypto
+    "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD",
+    "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD",
+    "MATIC-USD", "ATOM-USD", "UNI-USD",
+]  # keep in sync with src/config/market_categories.py ALL_SYMBOLS
 
 
 def get_symbols() -> list[str]:
-    if os.getenv("DEV_MODE", "false").lower() == "true":
-        return DEV_SYMBOLS
     return ALL_SYMBOLS
 
 

@@ -105,7 +105,7 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
   const [trailPct, setTrailPct]     = useState<number>(1.5)
   const [tpPts, setTpPts]           = useState<number>(2.0)
   const [slEnabled, setSlEnabled]   = useState(true)
-  const [tpEnabled, setTpEnabled]   = useState(true)
+  const [tpEnabled, setTpEnabled]   = useState(isBuy)  // TP only for long orders
 
   // Hold-to-execute
   const [holdPct, setHoldPct]       = useState(0)
@@ -129,12 +129,14 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
         setQuotePrice(price)
         setAtr(atrVal)
         // Default SL = 1x ATR, TP = 2x ATR (or 1% / 2% of price as fallback)
+        // Enforce a minimum of $0.10 so we never produce an invalid bracket order
+        const MIN_PTS = 0.10
         if (atrVal && atrVal > 0) {
-          setSlPts(parseFloat(atrVal.toFixed(2)))
-          setTpPts(parseFloat((atrVal * 2).toFixed(2)))
+          setSlPts(Math.max(MIN_PTS, parseFloat(atrVal.toFixed(2))))
+          setTpPts(Math.max(MIN_PTS, parseFloat((atrVal * 2).toFixed(2))))
         } else if (price && price > 0) {
-          setSlPts(parseFloat((price * 0.01).toFixed(2)))
-          setTpPts(parseFloat((price * 0.02).toFixed(2)))
+          setSlPts(Math.max(MIN_PTS, parseFloat((price * 0.01).toFixed(2))))
+          setTpPts(Math.max(MIN_PTS, parseFloat((price * 0.02).toFixed(2))))
         }
       } catch { /* leave defaults */ }
       finally { setLoadingData(false) }
@@ -456,7 +458,8 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
             )}
           </div>
 
-          {/* Take profit */}
+          {/* Take profit — only available for long (buy) orders */}
+          {isBuy && (
           <div style={{
             background: "var(--bg2)", border: "1px solid var(--border)",
             borderRadius: 10, padding: "10px 12px",
@@ -499,6 +502,7 @@ export function OrderEntry({ strategy: s, detail, onDismiss, onExecuted }: Order
               <span style={{ fontSize: 12, color: "var(--dim)" }}>No target — manual close only</span>
             )}
           </div>
+          )}
         </div>
       </div>
 

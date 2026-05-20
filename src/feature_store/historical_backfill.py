@@ -29,16 +29,26 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 SYMBOLS = [
-    # US equities
-    "SPY", "QQQ", "IWM",
-    "AAPL", "MSFT", "NVDA", "TSLA", "META", "GOOGL", "AMZN", "AMD", "NFLX",
-    "INTC", "CRM", "PLTR", "COIN",
-    # Energy & commodities
-    "USO", "XOM", "XLE", "LNG",
-    "GLD", "SLV", "UNG", "WEAT",
-    # Rates
-    "TLT",
-]
+    # Broad-market index ETFs
+    "SPY", "QQQ", "DIA", "IWM", "VTI", "EEM", "ARKK",
+    # Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA",
+    "AMD", "INTC", "CRM", "NFLX", "PLTR", "COIN",
+    # Finance
+    "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+    # Healthcare
+    "JNJ", "UNH", "LLY", "PFE", "ABBV", "AMGN",
+    # Energy
+    "XOM", "CVX", "XLE", "USO", "UNG", "LNG",
+    # Metals & commodities
+    "GLD", "SLV", "IAU", "GDX", "WEAT", "CORN", "DBA",
+    # Bonds / rates
+    "TLT", "IEF", "SHY", "HYG", "AGG", "TIP",
+    # Crypto
+    "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD",
+    "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD",
+    "MATIC-USD", "ATOM-USD", "UNI-USD",
+]  # keep in sync with src/config/market_categories.py ALL_SYMBOLS
 BACKFILL_YEARS = int(os.getenv("BACKFILL_YEARS", "5"))
 TIMESCALE_URL  = os.getenv(
     "TIMESCALE_URL",

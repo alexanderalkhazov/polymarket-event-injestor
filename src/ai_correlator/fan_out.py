@@ -298,6 +298,18 @@ async def fan_out_to_users(opp: dict, db, redis, regime: dict | None = None) -> 
             "avg_loss_pct": avg_loss_pct,
         }
         risk = _monte_carlo_risk([dict(r) for r in active_rows] + [candidate])
+
+        # Correlation penalty: the Monte Carlo draws are independent (Bernoulli),
+        # but real drawdowns are correlated — equity longs all lose together in a
+        # selloff. When ≥3 active strategies share a direction, multiply the simulated
+        # ruin probability by 1.5 to account for this hidden concentration risk.
+        if same_dir_count >= 2:  # +1 for the candidate we're evaluating = 3 total
+            risk = {**risk, "p_loss_10pct": min(risk["p_loss_10pct"] * 1.5, 1.0)}
+            logger.debug(
+                "Correlation-adjusted ruin prob: %.1f%% → %.1f%%",
+                risk["p_loss_10pct"] / 1.5 * 100, risk["p_loss_10pct"] * 100,
+            )
+
         if risk["p_loss_10pct"] > MAX_RUIN_PROB:
             logger.info(
                 "User %s: ruin prob %.1f%% exceeds %.0f%% limit — skipping",

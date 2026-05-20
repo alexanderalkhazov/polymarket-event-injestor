@@ -4,32 +4,47 @@ import { db } from "@/lib/db"
 // Subcategory → symbol list (kept in sync with catalog/route.ts static data)
 // Crypto symbols come live from CoinGecko so they're resolved at subscribe-time
 // by fetching the catalog. Static categories are duplicated here for fast resolution.
+// Backend-supported symbols — only these have OHLCV history, features, and analytics.
+// Kept in sync with src/config/market_categories.py ALL_SYMBOLS.
+const SUPPORTED_SYMBOLS = new Set([
+  "SPY","QQQ","DIA","IWM","VTI","EEM","ARKK",
+  "AAPL","MSFT","NVDA","GOOGL","META","AMZN","TSLA","AMD","INTC","CRM","NFLX","PLTR","COIN",
+  "JPM","BAC","GS","MS","WFC","V","MA",
+  "JNJ","UNH","LLY","PFE","ABBV","AMGN",
+  "XOM","CVX","XLE","USO","UNG","LNG",
+  "GLD","SLV","IAU","GDX","WEAT","CORN","DBA",
+  "TLT","IEF","SHY","HYG","AGG","TIP",
+  "BTC-USD","ETH-USD","BNB-USD","SOL-USD","XRP-USD",
+  "ADA-USD","DOGE-USD","AVAX-USD","DOT-USD","LINK-USD",
+  "MATIC-USD","ATOM-USD","UNI-USD",
+])
+
 const SUBCATEGORY_SYMBOLS: Record<string, string[]> = {
   // US Equities
-  equities_tech:      ["AAPL","MSFT","NVDA","GOOGL","META","AMZN","TSLA","AMD","INTC","CRM"],
-  equities_finance:   ["JPM","BAC","GS","MS","WFC","BLK","V","MA"],
-  equities_healthcare:["JNJ","UNH","LLY","PFE","MRNA","ABBV","AMGN","BMY"],
-  equities_indices:   ["SPY","QQQ","DIA","IWM","VTI","EEM","ARKK"],
+  equities_tech:       ["AAPL","MSFT","NVDA","GOOGL","META","AMZN","TSLA","AMD","INTC","CRM","NFLX","PLTR","COIN"],
+  equities_finance:    ["JPM","BAC","GS","MS","WFC","V","MA"],
+  equities_healthcare: ["JNJ","UNH","LLY","PFE","ABBV","AMGN"],
+  equities_indices:    ["SPY","QQQ","DIA","IWM","VTI","EEM","ARKK"],
   // Commodities
-  commodities_metals:      ["GLD","SLV","GOLD","NEM","RGLD"],
-  commodities_energy:      ["USO","UNG","BNO","XLE","XOM","CVX","LNG"],
-  commodities_agriculture: ["WEAT","CORN","SOYB","DBA","MOO"],
+  commodities_metals:      ["GLD","SLV","IAU","GDX"],
+  commodities_energy:      ["XOM","CVX","XLE","USO","UNG","LNG"],
+  commodities_agriculture: ["WEAT","CORN","DBA"],
   // Macro
-  macro_bonds:     ["TLT","IEF","SHY","HYG","JNK","AGG"],
-  macro_inflation: ["TIP","PDBC","IAU","INFL"],
-  // Crypto — these can also be in the DB directly from the catalog response
+  macro_bonds:     ["TLT","IEF","SHY","HYG","AGG","TIP"],
+  macro_inflation: ["TIP","IAU"],
+  // Crypto (yfinance -USD pairs with meaningful history)
   crypto_large_cap: ["BTC-USD","ETH-USD","BNB-USD","SOL-USD","XRP-USD","ADA-USD","DOGE-USD","AVAX-USD"],
-  crypto_defi:      ["UNI-USD","AAVE-USD","MKR-USD","CRV-USD","SNX-USD"],
+  crypto_defi:      ["UNI-USD","AAVE-USD","MKR-USD","LINK-USD"],
   crypto_layer1:    ["SOL-USD","ADA-USD","AVAX-USD","DOT-USD","ATOM-USD"],
-  crypto_layer2:    ["MATIC-USD","ARB-USD","OP-USD","IMX-USD"],
-  crypto_meme:      ["DOGE-USD","SHIB-USD","PEPE-USD","WIF-USD"],
-  crypto_ai:        ["FET-USD","RNDR-USD","TAO-USD","AGIX-USD"],
-  // Legacy top-level keys (kept for backward compat with rows created before the subcategory refactor)
+  crypto_layer2:    ["MATIC-USD"],
+  crypto_meme:      ["DOGE-USD","SHIB-USD"],
+  crypto_ai:        ["FET-USD","RNDR-USD"],
+  // Legacy top-level keys (backward compat)
   crypto:      ["BTC-USD","ETH-USD","BNB-USD","SOL-USD","XRP-USD","ADA-USD","DOGE-USD","AVAX-USD"],
   us_equities: ["SPY","QQQ","AAPL","MSFT","NVDA","JPM","GS","V","MA"],
-  oil_energy:  ["USO","UNG","BNO","XLE","XOM","CVX","LNG"],
+  oil_energy:  ["USO","UNG","XLE","XOM","CVX","LNG"],
   rates_macro: ["TLT","IEF","GLD","SLV","TIP","AGG"],
-  commodities: ["GLD","SLV","USO","UNG","WEAT","CORN","SOYB"],
+  commodities: ["GLD","SLV","USO","UNG","WEAT","CORN"],
   fx:          [],
 }
 
@@ -43,7 +58,7 @@ async function resolveSubscriptions(userId: string): Promise<void> {
   const activeSymbols = new Set<string>()
   for (const row of catRows.rows) {
     for (const sym of SUBCATEGORY_SYMBOLS[row.category] ?? []) {
-      activeSymbols.add(sym)
+      if (SUPPORTED_SYMBOLS.has(sym)) activeSymbols.add(sym)
     }
   }
 
@@ -91,11 +106,6 @@ export async function POST(req: Request) {
     "INSERT INTO market_category_subscriptions (user_id, category) VALUES ($1,$2) ON CONFLICT DO NOTHING",
     [userId, category]
   )
-
-  // If caller passed live symbols (e.g. from CoinGecko catalog), upsert them directly
-  if (Array.isArray(symbols) && symbols.length > 0) {
-    SUBCATEGORY_SYMBOLS[category] = symbols
-  }
 
   await resolveSubscriptions(userId!)
   return Response.json({ ok: true })

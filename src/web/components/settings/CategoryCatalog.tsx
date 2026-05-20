@@ -281,9 +281,9 @@ export function CategoryCatalog({ initialCategories = [], onChange }: Props) {
                     {sub.description}
                   </div>
 
-                  {/* Symbol chips */}
+                  {/* Symbol chips — all symbols, wrapping */}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {sub.symbols.slice(0, 5).map((sym) => (
+                    {sub.symbols.map((sym) => (
                       <span key={sym.ticker} style={{
                         fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600,
                         background: isActive ? expandedColors.bg : "var(--bg3)",
@@ -295,11 +295,6 @@ export function CategoryCatalog({ initialCategories = [], onChange }: Props) {
                         {sym.ticker.replace("-USD", "")}
                       </span>
                     ))}
-                    {sub.symbols.length > 5 && (
-                      <span style={{ fontSize: 10, color: "var(--dim)", padding: "2px 4px" }}>
-                        +{sub.symbols.length - 5}
-                      </span>
-                    )}
                   </div>
 
                   {isLoading && (

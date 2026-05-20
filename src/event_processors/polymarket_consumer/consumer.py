@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +23,70 @@ _KEYWORD_TICKERS: list[tuple[str, list[str]]] = []
 for _cat in SENTIMENT_CATEGORIES:
     for _kw in _cat.keywords:
         _KEYWORD_TICKERS.append((_kw, _cat.related_tickers))
+
+# ── Direct ticker extraction from Polymarket question text ────────────────────
+# Lets "Will NVDA beat earnings?" route to NVDA instead of collapsing to a
+# generic category proxy like SPY.
+
+_TRACKED_SYMBOLS: frozenset[str] = frozenset({
+    "SPY","QQQ","DIA","IWM","VTI","EEM","ARKK",
+    "AAPL","MSFT","NVDA","GOOGL","META","AMZN","TSLA","AMD","INTC","CRM","NFLX","PLTR","COIN",
+    "JPM","BAC","GS","MS","WFC","V","MA",
+    "JNJ","UNH","LLY","PFE","ABBV","AMGN",
+    "XOM","CVX","XLE","USO","UNG","LNG",
+    "GLD","SLV","IAU","GDX","WEAT","CORN","DBA",
+    "TLT","IEF","SHY","HYG","AGG","TIP",
+    "BTC-USD","ETH-USD","BNB-USD","SOL-USD","XRP-USD",
+    "ADA-USD","DOGE-USD","AVAX-USD","DOT-USD","LINK-USD",
+    "MATIC-USD","ATOM-USD","UNI-USD",
+})
+
+# Ordered longest-first so "federal reserve" matches before "fed"
+_NAME_TO_TICKER: list[tuple[str, str]] = sorted([
+    ("nvidia",          "NVDA"),  ("apple",            "AAPL"),
+    ("microsoft",       "MSFT"),  ("amazon",           "AMZN"),
+    ("alphabet",        "GOOGL"), ("google",           "GOOGL"),
+    ("facebook",        "META"),  ("meta",             "META"),
+    ("tesla",           "TSLA"),  ("amd",              "AMD"),
+    ("intel",           "INTC"),  ("salesforce",       "CRM"),
+    ("netflix",         "NFLX"),  ("palantir",         "PLTR"),
+    ("coinbase",        "COIN"),  ("jpmorgan",         "JPM"),
+    ("jp morgan",       "JPM"),   ("bank of america",  "BAC"),
+    ("goldman sachs",   "GS"),    ("goldman",          "GS"),
+    ("morgan stanley",  "MS"),    ("wells fargo",      "WFC"),
+    ("visa",            "V"),     ("mastercard",       "MA"),
+    ("johnson & johnson","JNJ"),  ("unitedhealth",     "UNH"),
+    ("eli lilly",       "LLY"),   ("pfizer",           "PFE"),
+    ("exxon",           "XOM"),   ("chevron",          "CVX"),
+    ("bitcoin",         "BTC-USD"),("ethereum",        "ETH-USD"),
+    ("solana",          "SOL-USD"),("dogecoin",        "DOGE-USD"),
+    ("s&p 500",         "SPY"),   ("s&p500",           "SPY"),
+    ("sp500",           "SPY"),   ("nasdaq",           "QQQ"),
+    ("dow jones",       "DIA"),   ("gold",             "GLD"),
+    ("silver",          "SLV"),   ("crude oil",        "USO"),
+    ("crude",           "USO"),   ("natural gas",      "UNG"),
+    ("federal reserve", "TLT"),   ("fed rate",         "TLT"),
+    ("treasury",        "TLT"),
+], key=lambda x: len(x[0]), reverse=True)
+
+# Matches isolated uppercase words (2-5 chars) — avoids hitting "A", "THE", etc.
+_TICKER_RE = re.compile(r'(?<![A-Z-])([A-Z]{2,5})(?![A-Z-])')
+_NOISE_WORDS = frozenset({"THE", "AND", "FOR", "OR", "AT", "BY", "IN", "OF", "TO",
+                           "BE", "IS", "ON", "UP", "AN", "AS", "IF", "IT", "NO",
+                           "DO", "SO", "GO", "US", "UK", "EU", "AM", "PM"})
+
+
+def _extract_ticker_from_question(question: str) -> Optional[str]:
+    """Try to extract a specific tracked ticker directly from a Polymarket question."""
+    q_lower = question.lower()
+    for name, ticker in _NAME_TO_TICKER:
+        if name in q_lower and ticker in _TRACKED_SYMBOLS:
+            return ticker
+    for m in _TICKER_RE.finditer(question):
+        candidate = m.group(1)
+        if candidate in _TRACKED_SYMBOLS and candidate not in _NOISE_WORDS:
+            return candidate
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -178,13 +243,21 @@ class PolymarketConsumer:
         # Only fire a tradeable signal when the question maps to real instruments.
         # Unmapped markets (sports, celebrity, politics without clear ticker) are
         # handled exclusively via the macro sentiment cache — not as trade signals.
-        matched_tickers: list[str] = []
-        for kw, tickers in _KEYWORD_TICKERS:
-            if kw in question_lower:
-                for t in tickers:
-                    if t not in matched_tickers:
-                        matched_tickers.append(t)
-                break  # first match wins
+
+        # 1. Try direct extraction (e.g. "Will NVDA beat earnings?" → NVDA)
+        direct = _extract_ticker_from_question(question)
+        if direct:
+            matched_tickers = [direct]
+            logger.debug("Direct ticker match %s for market %s", direct, market_id[:16])
+        else:
+            # 2. Fall back to keyword→category mapping
+            matched_tickers = []
+            for kw, tickers in _KEYWORD_TICKERS:
+                if kw in question_lower:
+                    for t in tickers:
+                        if t not in matched_tickers:
+                            matched_tickers.append(t)
+                    break  # first match wins
 
         if not matched_tickers:
             logger.debug("No ticker mapping for market %s — skipping signal", market_id[:16])

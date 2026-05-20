@@ -1,6 +1,7 @@
 """SEC 8-K consumer — writes filing signals to PostgreSQL and notifies Redis."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -16,8 +17,10 @@ logger = logging.getLogger(__name__)
 
 COOLDOWN_HOURS = 6
 
-# Items that imply a bullish bias
-_BULLISH_ITEMS = {"1.01", "2.02"}
+# Items that imply a bullish bias.
+# 2.02 (earnings) is intentionally excluded — direction depends on beat vs miss,
+# which can only be determined by parsing the actual filing text.
+_BULLISH_ITEMS = {"1.01"}
 # Items that imply a bearish bias
 _BEARISH_ITEMS = {"2.05", "5.02"}
 
@@ -87,6 +90,9 @@ class SECConsumer:
         try:
             while True:
                 msg = consumer.poll(timeout=1.0)
+                # Yield to the event loop after each blocking poll so other async
+                # tasks (DB writes, Redis publishes) can make progress.
+                await asyncio.sleep(0)
                 if msg is None:
                     continue
                 if msg.error():
@@ -95,9 +101,8 @@ class SECConsumer:
                         pass  # normal end-of-partition
                     elif code == KafkaError.UNKNOWN_TOPIC_OR_PART:
                         # Topic doesn't exist yet — producer hasn't published.
-                        # Log once at DEBUG and wait; it resolves automatically.
                         logger.debug("raw.sec topic not yet created — waiting for producer")
-                        import asyncio; await asyncio.sleep(10)
+                        await asyncio.sleep(10)
                     else:
                         logger.error("Kafka error: %s", msg.error())
                     continue

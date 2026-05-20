@@ -179,25 +179,49 @@ export async function POST(req: Request) {
     orderParams.order_class = "oto"
     orderParams.stop_loss   = { trail_percent: Number(trail_percent).toFixed(2) }
   } else {
-    // Validate stop/take against actual price — frontend quote may be stale
+    // Validate stop/take against actual price — frontend quote may be stale.
+    // Alpaca requires TP/SL prices to be strictly away from base price.
+    // For SELL (short) orders we only attach stop_loss to avoid Alpaca's TP
+    // bracket constraint issues (live price at fill may differ from quote).
+    const MIN_GAP = 0.05
     const slNum = stop_loss_price ? Number(stop_loss_price) : null
     const tpNum = take_profit_price ? Number(take_profit_price) : null
-    const validSl = slNum && (isBuy ? slNum < price : slNum > price)
-    const validTp = tpNum && (isBuy ? tpNum > price : tpNum < price)
+    // SL: for buy = below price, for sell = above price
+    const validSl = slNum != null && (isBuy ? slNum <= price - MIN_GAP : slNum >= price + MIN_GAP)
+    // TP: only attach for BUY orders — short-sell TP brackets are fragile with live price drift
+    const validTp = isBuy && tpNum != null && tpNum >= price + MIN_GAP
     if (validSl || validTp) {
       orderParams.order_class = "bracket"
-      if (validSl) orderParams.stop_loss    = { stop_price:  slNum!.toFixed(2) }
-      if (validTp) orderParams.take_profit  = { limit_price: tpNum!.toFixed(2) }
+      if (validSl) orderParams.stop_loss   = { stop_price:  slNum!.toFixed(2) }
+      if (validTp) orderParams.take_profit = { limit_price: tpNum!.toFixed(2) }
     }
   }
+
+  console.log("[trades] orderParams →", JSON.stringify(orderParams), "livePrice=", price)
 
   let order: Record<string, unknown>
   try {
     order = await alpaca.createOrder(orderParams) as Record<string, unknown>
   } catch (err: unknown) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const alpacaMsg = (err as any)?.response?.data?.message ?? (err as any)?.message ?? "Order rejected by broker"
-    return Response.json({ error: alpacaMsg }, { status: 422 })
+    const alpacaMsg: string = (err as any)?.response?.data?.message ?? (err as any)?.message ?? ""
+    console.log("[trades] Alpaca error:", alpacaMsg, "| params:", JSON.stringify(orderParams))
+    // If the bracket legs were rejected (stale TP/SL vs live price), retry as a plain order
+    const isBracketError = /take_profit|stop_loss|limit_price|stop_price/i.test(alpacaMsg)
+    if (isBracketError && orderParams.order_class) {
+      delete orderParams.order_class
+      delete orderParams.take_profit
+      delete orderParams.stop_loss
+      try {
+        order = await alpaca.createOrder(orderParams) as Record<string, unknown>
+      } catch (err2: unknown) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const msg2 = (err2 as any)?.response?.data?.message ?? (err2 as any)?.message ?? "Order rejected by broker"
+        return Response.json({ error: msg2 }, { status: 422 })
+      }
+    } else {
+      return Response.json({ error: alpacaMsg || "Order rejected by broker" }, { status: 422 })
+    }
   }
 
   await db.query(

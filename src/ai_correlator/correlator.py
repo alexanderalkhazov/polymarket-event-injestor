@@ -85,14 +85,43 @@ MAX_POSITIONS       = int(os.getenv("MAX_POSITIONS", "5"))
 EARNINGS_GUARD_DAYS = int(os.getenv("EARNINGS_GUARD_DAYS", "3"))
 SPRT_MAINTENANCE_H  = int(os.getenv("SPRT_MAINTENANCE_H", "6"))
 
-# Confidence thresholds by regime: trading against the trend needs more conviction
+# Confidence thresholds by regime: trading against the trend needs more conviction.
+# Expressed as multipliers on CONFIDENCE_THRESHOLD so lowering the base threshold
+# (e.g. while XGBoost is undertrained) also relaxes the contrarian gates automatically.
 REGIME_THRESHOLD = {
-    ("bear",     "buy"):  0.80,
-    ("bull",     "sell"): 0.78,
-    ("sideways", "buy"):  0.68,
-    ("sideways", "sell"): 0.68,
+    ("bear",     "buy"):  CONFIDENCE_THRESHOLD * 1.10,   # contrarian in bear → modestly higher bar
+    ("bull",     "sell"): CONFIDENCE_THRESHOLD * 1.10,   # contrarian in bull → modestly higher bar
+    ("sideways", "buy"):  CONFIDENCE_THRESHOLD * 1.05,
+    ("sideways", "sell"): CONFIDENCE_THRESHOLD * 1.05,
     ("bull",     "buy"):  CONFIDENCE_THRESHOLD,
     ("bear",     "sell"): CONFIDENCE_THRESHOLD,
+}
+
+# Maps single-stock / sector symbols to a sector-proxy ticker that we track.
+# Used in step 4.8 to check whether the broader sector confirms the signal direction.
+_SECTOR_PROXY: dict[str, str] = {
+    # Tech → QQQ
+    "AAPL": "QQQ", "MSFT": "QQQ", "NVDA": "QQQ", "GOOGL": "QQQ",
+    "META": "QQQ", "AMZN": "QQQ", "TSLA": "QQQ", "AMD":   "QQQ",
+    "INTC": "QQQ", "CRM":  "QQQ", "NFLX": "QQQ", "PLTR":  "QQQ", "COIN": "QQQ",
+    # Finance / consumer → SPY (no XLF in tracked symbols)
+    "JPM": "SPY", "BAC": "SPY", "GS": "SPY", "MS":  "SPY",
+    "WFC": "SPY", "V":   "SPY", "MA": "SPY",
+    # Healthcare → SPY (no XLV in tracked symbols)
+    "JNJ": "SPY", "UNH": "SPY", "LLY": "SPY",
+    "PFE": "SPY", "ABBV":"SPY", "AMGN":"SPY",
+    # Energy → XLE
+    "XOM": "XLE", "CVX": "XLE",
+    # Fixed income / credit → TLT (rates drive these)
+    "HYG": "TLT", "AGG": "TLT", "SHY": "TLT", "IEF": "TLT", "TIP": "TLT",
+    # Precious metals → GLD
+    "SLV": "GLD", "IAU": "GLD", "GDX": "GLD",
+    # Altcoins → BTC-USD as crypto benchmark
+    "ETH-USD":  "BTC-USD", "BNB-USD":  "BTC-USD", "SOL-USD":  "BTC-USD",
+    "XRP-USD":  "BTC-USD", "ADA-USD":  "BTC-USD", "DOGE-USD": "BTC-USD",
+    "AVAX-USD": "BTC-USD", "DOT-USD":  "BTC-USD", "LINK-USD": "BTC-USD",
+    "MATIC-USD":"BTC-USD", "ATOM-USD": "BTC-USD", "UNI-USD":  "BTC-USD",
+    # Commodity ETFs (WEAT, CORN, DBA, USO, UNG, LNG) have no reliable proxy → skip
 }
 
 _HOLD_TO_DAYS = {"3d": 3, "5d": 5, "10d": 10}
@@ -361,8 +390,12 @@ async def _is_near_earnings(symbol: str, db: asyncpg.Pool) -> bool:
     return False
 
 
-async def _get_market_regime(tsdb: asyncpg.Pool) -> dict:
-    result = {"trend": "sideways", "volatility": "elevated", "vix": None, "spy_vs_200d_pct": None}
+async def _get_market_regime(tsdb: asyncpg.Pool, redis=None) -> dict:
+    result = {
+        "trend": "sideways", "volatility": "elevated",
+        "vix": None, "spy_vs_200d_pct": None,
+        "dealer_gamma": "unknown",  # positive / negative / unknown
+    }
     try:
         spy_rows = await tsdb.fetch(
             "SELECT close FROM raw_ohlcv WHERE symbol='SPY' AND interval='1d' ORDER BY ts DESC LIMIT 200"
@@ -384,6 +417,20 @@ async def _get_market_regime(tsdb: asyncpg.Pool) -> dict:
             result["volatility"] = "low" if vix < 18 else ("high" if vix >= 28 else "elevated")
     except Exception as exc:
         logger.warning("Regime detection failed: %s", exc)
+
+    # GEX from Redis — written by gamma-producer every 30 min.
+    # Negative dealer gamma means market makers must buy into rallies and sell into
+    # dips (short gamma hedging), which amplifies directional moves. This is critical
+    # context for sizing: squeeze setups are MORE explosive in negative GEX regimes.
+    if redis is not None:
+        try:
+            gex_raw = await redis.get("gex:SPY")
+            if gex_raw:
+                result["dealer_gamma"] = "negative" if float(gex_raw) < 0 else "positive"
+                result["spy_gex"] = round(float(gex_raw), 0)
+        except Exception:
+            pass
+
     return result
 
 
@@ -501,11 +548,18 @@ def _extract_poly_ticker(question: str) -> Optional[str]:
     return None
 
 
-async def _match_hypothesis(feat_dict: dict, db: asyncpg.Pool) -> Optional[dict]:
+async def _match_hypothesis(feat_dict: dict, db: asyncpg.Pool,
+                            signal_direction: Optional[str] = None) -> Optional[dict]:
     rows = await db.fetch("SELECT * FROM hypotheses WHERE is_active=TRUE ORDER BY created_at")
+
+    # Improvement 3: prefer hypotheses whose direction aligns with the signal's direction.
+    # Score each candidate: direction match = 2pts, conditions met = 1pt (always required).
+    # Fall back to any matching hypothesis if no direction-aligned one exists.
+    direction_matches: list[dict] = []
+    any_matches: list[dict] = []
+
     for row in rows:
         h = dict(row)
-        # Skip hypotheses that SPRT has determined are no longer working
         sprt_status = _sprt_check(h.get("sprt_wins", 0), h.get("sprt_losses", 0))
         if sprt_status == "dead":
             logger.debug("Hypothesis '%s' SPRT-dead — skipping", h["name"])
@@ -513,9 +567,17 @@ async def _match_hypothesis(feat_dict: dict, db: asyncpg.Pool) -> Optional[dict]
         conditions: dict = h.get("feature_conditions") or {}
         if isinstance(conditions, str):
             conditions = json.loads(conditions)
-        if _conditions_met(feat_dict, conditions):
-            return h
-    # No catch-all — drop signals that match no real hypothesis
+        if not _conditions_met(feat_dict, conditions):
+            continue
+        any_matches.append(h)
+        if signal_direction and h.get("direction") == signal_direction:
+            direction_matches.append(h)
+
+    # Return the best direction-aligned match first, then any match
+    if direction_matches:
+        return direction_matches[0]
+    if any_matches:
+        return any_matches[0]
     return None
 
 
@@ -630,6 +692,38 @@ def _dynamic_stop_loss(feat_dict: dict, regime: dict) -> float:
     return round(min(max(base * vol_ratio, 0.02), 0.12), 4)
 
 
+# ── Startup replay ────────────────────────────────────────────────────────────
+
+async def _replay_startup_signals(db: asyncpg.Pool, redis) -> None:
+    """Replay recent DB signals that arrived while data-init blocked the correlator.
+
+    Waits 3 s for the pub/sub loop to enter its listen() call, then publishes the
+    last 6 hours of signals (newest-first, capped at 60). Dedup and all quality
+    gates in _process() prevent duplicate opportunities.
+    """
+    await asyncio.sleep(3)
+    try:
+        rows = await db.fetch(
+            """SELECT id FROM signals
+               WHERE created_at > NOW() - INTERVAL '6 hours'
+               ORDER BY score DESC, created_at DESC
+               LIMIT 60"""
+        )
+        if not rows:
+            logger.info("Startup replay: no signals in last 6 h — nothing to replay")
+            return
+        logger.info("Startup replay: replaying %d recent signals", len(rows))
+        for row in rows:
+            await redis.publish(
+                "new_signal",
+                json.dumps({"signal_id": str(row["id"])}),
+            )
+            await asyncio.sleep(0.2)   # gentle pacing — avoid overwhelming the pipeline
+        logger.info("Startup replay: done")
+    except Exception as exc:
+        logger.warning("Startup replay failed: %s", exc)
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 async def run() -> None:
@@ -679,13 +773,58 @@ async def run() -> None:
     await pubsub.subscribe("new_signal")
     logger.info("AI correlator subscribed to new_signal")
 
+    # Replay signals from the last 6 hours that arrived while the correlator was
+    # waiting for data-init to complete. Redis pub/sub is fire-and-forget — any
+    # messages published before this subscription are gone. Replaying from the DB
+    # ensures the post-data-init startup always has signals to process.
+    asyncio.create_task(_replay_startup_signals(db, redis))
+
+    # Polymarket produces 5–30 signals/minute per ticker. Without clustering, each
+    # triggers a full pipeline (XGBoost + Claude + DB writes). Cluster them: buffer
+    # polymarket signals per symbol for 30 s, then process only the highest-scored one.
+    _poly_buffer: dict[str, list[str]] = {}   # symbol → [signal_ids]
+    _poly_tasks:  dict[str, asyncio.Task] = {}  # symbol → active flush task
+
+    async def _flush_poly_cluster(symbol: str) -> None:
+        await asyncio.sleep(30)
+        ids = _poly_buffer.pop(symbol, [])
+        _poly_tasks.pop(symbol, None)
+        if not ids:
+            return
+        rows = await db.fetch(
+            "SELECT id::text AS id, score FROM signals WHERE id = ANY($1::uuid[])",
+            [uuid.UUID(sid) for sid in ids],
+        )
+        if not rows:
+            return
+        best_id = str(max(rows, key=lambda r: float(r["score"]))["id"])
+        logger.info(
+            "Poly cluster: consolidated %d signals for %s → processing best (score=%.3f)",
+            len(ids), symbol, max(float(r["score"]) for r in rows),
+        )
+        await _process(best_id, db, tsdb, redis)
+
     try:
         async for message in pubsub.listen():
             if message["type"] != "message":
                 continue
             try:
                 data = json.loads(message["data"])
-                await _process(data["signal_id"], db, tsdb, redis)
+                sid  = data["signal_id"]
+
+                # Route polymarket signals through the 30s cluster buffer;
+                # all other sources are processed immediately.
+                src_row = await db.fetchrow(
+                    "SELECT source, symbol FROM signals WHERE id=$1",
+                    uuid.UUID(sid),
+                )
+                if src_row and src_row["source"] == "polymarket":
+                    sym = src_row["symbol"]
+                    _poly_buffer.setdefault(sym, []).append(sid)
+                    if sym not in _poly_tasks or _poly_tasks[sym].done():
+                        _poly_tasks[sym] = asyncio.create_task(_flush_poly_cluster(sym))
+                else:
+                    await _process(sid, db, tsdb, redis)
             except Exception as exc:
                 logger.error("Error processing signal: %s", exc, exc_info=True)
     finally:
@@ -717,26 +856,119 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
             return
         feat_dict = dict(feat_row)
 
-    # 3. Score
+        # Archive the real-time feature snapshot for this signal. These values
+        # (poly_yes_price, news_sentiment_1h, put_call_ratio, etc.) are zeroed
+        # in the historical backfill — capturing them here builds a dataset that
+        # enables proper retraining once enough live data accumulates (~3 months).
+        try:
+            await tsdb.execute(
+                """INSERT INTO raw_signal_features
+                   (ts, signal_id, symbol,
+                    poly_yes_price, poly_conviction_delta_1h, poly_conviction_delta_4h,
+                    poly_volume_24h, news_sentiment_1h, news_sentiment_4h,
+                    news_hotness_peak_4h, news_article_count_4h,
+                    put_call_ratio, unusual_sweep_count_4h,
+                    rsi_14, macd_histogram, vol_ratio_30d, vix_level)
+                   VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                   ON CONFLICT DO NOTHING""",
+                uuid.UUID(signal_id), symbol,
+                feat_dict.get("poly_yes_price"),
+                feat_dict.get("poly_conviction_delta_1h"),
+                feat_dict.get("poly_conviction_delta_4h"),
+                feat_dict.get("poly_volume_24h"),
+                feat_dict.get("news_sentiment_1h"),
+                feat_dict.get("news_sentiment_4h"),
+                feat_dict.get("news_hotness_peak_4h"),
+                feat_dict.get("news_article_count_4h"),
+                feat_dict.get("put_call_ratio"),
+                feat_dict.get("unusual_sweep_count_4h"),
+                feat_dict.get("rsi_14"),
+                feat_dict.get("macd_histogram"),
+                feat_dict.get("vol_ratio_30d"),
+                feat_dict.get("vix_level"),
+            )
+        except Exception as _arc_exc:
+            logger.debug("Feature archival failed for %s: %s", signal_id[:8], _arc_exc)
+
+    else:
+        # For polymarket signals, build a minimal feat_dict from the signal payload
+        # so hypothesis conditions on poly_conviction_delta_1h can be evaluated
+        payload = signal.get("payload") or {}
+        if isinstance(payload, str):
+            import json as _json
+            payload = _json.loads(payload)
+        change_abs = float(payload.get("change_abs") or 0)
+        feat_dict = {
+            "poly_conviction_delta_1h": change_abs if (signal.get("direction") or "up") == "up" else -change_abs,
+            "poly_yes_price": float(payload.get("yes_price") or 0),
+            "poly_volume_24h": float(payload.get("volume") or 0),
+        }
+
+    # 3. Score — register signal TYPE (not source) so different analytics signals
+    # (gex_squeeze_setup, short_squeeze_setup, earnings_setup, etc.) each count as
+    # an independent confirmation source. If we registered by source, all analytics
+    # signals would collapse to count=1 regardless of how many distinct signals fired.
+    src_key      = f"signal_sources:{symbol}"
+    signal_channel = signal.get("type") or signal["source"]
+    await redis.sadd(src_key, signal_channel)
+    await redis.expire(src_key, 86400)
+
     sig_direction = signal.get("direction") or "up"
+    raw_signal_score = min(float(signal.get("score") or 0), 1.0)
+
     if signal["source"] == "polymarket":
-        confidence     = min(float(signal.get("score") or 0), 1.0)
+        confidence     = raw_signal_score
         top_features: list[dict] = []
     else:
-        confidence, top_features = _score(feat_dict, direction=sig_direction)
-    logger.info("Signal %s: symbol=%s source=%s confidence=%.3f",
-                signal_id[:8], symbol, signal["source"], confidence)
+        xgb_confidence, top_features = _score(feat_dict, direction=sig_direction)
+        # Improvement 1: blend raw signal score (producer's quality assessment) with
+        # XGBoost output. The producer already encoded event strength (RSI level,
+        # options sweep size, sentiment magnitude) into the score — don't throw it away.
+        # Weight: 60% raw signal, 40% XGBoost. The model is undertrained (news/poly
+        # features were zeroed during training), so the producer score dominates until
+        # XGBoost is retrained on live feature data.
+        RAW_SIGNAL_WEIGHT = 0.60
+        confidence = RAW_SIGNAL_WEIGHT * raw_signal_score + (1 - RAW_SIGNAL_WEIGHT) * xgb_confidence
 
-    # 3.5. Market regime
-    regime = await _get_market_regime(tsdb)
-    logger.info("Regime: trend=%s vol=%s vix=%s",
-                regime["trend"], regime["volatility"], regime["vix"])
+    # Tiered signal-stack boost — each distinct signal TYPE that has fired for this
+    # symbol within 24h is an independent confirmation. The more independent evidence
+    # agrees, the more confidence deserves to rise:
+    #   2 types  → ×1.20  (news + technical, or GEX + earnings, etc.)
+    #   3 types  → ×1.40  (news + technical + insider)
+    #   4+ types → ×1.60  (full stack: GEX + squeeze + news + technical)
+    src_count = await redis.scard(f"signal_sources:{symbol}")
+    if src_count >= 4:
+        confidence = min(confidence * 1.60, 1.0)
+        logger.info("Signal stack TIER-S (×1.60) for %s: %d signal types active", symbol, src_count)
+    elif src_count >= 3:
+        confidence = min(confidence * 1.40, 1.0)
+        logger.info("Signal stack TIER-A+ (×1.40) for %s: %d signal types active", symbol, src_count)
+    elif src_count >= 2:
+        confidence = min(confidence * 1.20, 1.0)
+        logger.debug("Multi-signal boost (×1.20) for %s: %d signal types active", symbol, src_count)
+
+    # Improvement 3: inject signal direction into feat_dict so hypothesis conditions
+    # that reference signal-derived features (like price_change direction) match correctly.
+    if sig_direction == "up":
+        feat_dict.setdefault("_signal_direction_up", 1.0)
+    else:
+        feat_dict.setdefault("_signal_direction_down", 1.0)
+
+    logger.info("Signal %s: symbol=%s source=%s raw=%.3f confidence=%.3f",
+                signal_id[:8], symbol, signal["source"], raw_signal_score, confidence)
+
+    # 3.5. Market regime (includes GEX from Redis when gamma-producer is running)
+    regime = await _get_market_regime(tsdb, redis)
+    logger.info("Regime: trend=%s vol=%s vix=%s dealer_gamma=%s",
+                regime["trend"], regime["volatility"], regime["vix"],
+                regime.get("dealer_gamma", "unknown"))
 
     # 4. Confidence gate (regime-adjusted)
     direction_key = "sell" if sig_direction == "down" else "buy"
     threshold = REGIME_THRESHOLD.get((regime["trend"], direction_key), CONFIDENCE_THRESHOLD)
     if confidence < threshold:
-        logger.debug("Confidence %.3f below threshold %.3f — dropping", confidence, threshold)
+        logger.info("Confidence %.3f below threshold %.3f (regime=%s/%s) — dropping %s",
+                    confidence, threshold, regime["trend"], direction_key, signal_id[:8])
         return
 
     # 4.1. Re-entry lockout — prevents re-entering a symbol that recently stopped out
@@ -745,11 +977,11 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         logger.info("Re-entry lockout active for %s — skipping", symbol)
         return
 
-    # 4.2. Multi-source tracking — record that this source fired on this symbol.
-    # Used at step 7.1 to decide if a Tier A signal has multi-source confirmation.
+    # 4.2. Confirm signal type in the tracking set (already added in step 3;
+    # re-set expiry to ensure the 24h window is fresh for this signal).
     src_key = f"signal_sources:{symbol}"
-    await redis.sadd(src_key, signal["source"])
-    await redis.expire(src_key, 86400)   # 24h window
+    await redis.sadd(src_key, signal_channel)
+    await redis.expire(src_key, 86400)
 
     # 4.5. Symbol dedup — prevents signal bursts becoming duplicate opportunities
     if signal["source"] == "polymarket":
@@ -774,15 +1006,74 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
             logger.debug("Dedup: opportunity for %s in last 6h — skipping", symbol)
             return
 
-    # 4.6. Earnings guard
-    if signal["source"] != "polymarket" and await _is_near_earnings(symbol, db):
-        logger.info("Earnings within %d days for %s — skipping", EARNINGS_GUARD_DAYS, symbol)
-        return
+    # 4.6. Earnings guard — bypass for earnings-specific signal types so the
+    # earnings producer's own signals aren't eaten by the guard they're meant to exploit.
+    _sig_type = signal.get("type", "")
+    _earnings_signal = _sig_type in ("earnings_setup", "earnings_drift")
+    if signal["source"] != "polymarket" and not _earnings_signal:
+        if await _is_near_earnings(symbol, db):
+            logger.info("Earnings within %d days for %s — skipping", EARNINGS_GUARD_DAYS, symbol)
+            return
 
-    # 5. Match hypothesis (SPRT-dead hypotheses are skipped automatically)
-    hypothesis = await _match_hypothesis(feat_dict, db)
+    # 4.7. Technical momentum confirmation — checks whether MACD + SMA-slope support
+    # the signal direction using already-fetched feature data (no extra DB query).
+    # Boosts confidence when indicators align; penalises chasing an exhausted move.
+    if signal["source"] != "polymarket" and feat_dict:
+        macd   = float(feat_dict.get("macd_histogram") or 0)
+        slope  = float(feat_dict.get("sma_20_slope")   or 0)
+        rsi    = float(feat_dict.get("rsi_14")          or 50)
+        chg_1d = float(feat_dict.get("price_change_1d") or 0)
+
+        if sig_direction == "up":
+            if macd > 0 and slope > 0:
+                confidence = min(confidence * 1.08, 1.0)
+                logger.debug("Momentum confirm ×1.08 for %s (MACD>0, slope>0)", symbol)
+            if chg_1d > 0.025 and rsi > 72:
+                confidence *= 0.82
+                logger.info("Momentum: %s ran %.1f%% today RSI=%.0f — chasing, reducing conf",
+                            symbol, chg_1d * 100, rsi)
+        else:
+            if macd < 0 and slope < 0:
+                confidence = min(confidence * 1.08, 1.0)
+                logger.debug("Momentum confirm ×1.08 for %s (MACD<0, slope<0)", symbol)
+            if chg_1d < -0.025 and rsi < 28:
+                confidence *= 0.82
+                logger.info("Momentum: %s fell %.1f%% today RSI=%.0f — chasing, reducing conf",
+                            symbol, chg_1d * 100, rsi)
+
+    # 4.8. Cross-sector regime — check that the symbol's sector proxy is not trending
+    # strongly against the signal direction. Penalises swimming against sector rotation;
+    # small boost when sector confirms. One extra DB query only for mapped symbols.
+    sector_proxy = _SECTOR_PROXY.get(symbol)
+    if sector_proxy and sector_proxy != symbol:
+        proxy_row = await tsdb.fetchrow(
+            "SELECT price_change_5d, rsi_14 FROM features "
+            "WHERE symbol=$1 ORDER BY ts DESC LIMIT 1",
+            sector_proxy,
+        )
+        if proxy_row:
+            p5d  = float(proxy_row["price_change_5d"] or 0)
+            prsi = float(proxy_row["rsi_14"]           or 50)
+            if sig_direction == "up" and p5d < -0.03:
+                confidence *= 0.85
+                logger.info("Sector %s down %.1f%% — penalising %s BUY",
+                            sector_proxy, p5d * 100, symbol)
+            elif sig_direction == "down" and p5d > 0.03:
+                confidence *= 0.85
+                logger.info("Sector %s up %.1f%% — penalising %s SELL",
+                            sector_proxy, p5d * 100, symbol)
+            elif sig_direction == "up" and p5d > 0.015 and prsi < 68:
+                confidence = min(confidence * 1.07, 1.0)
+                logger.debug("Sector %s confirming up — boosting %s BUY", sector_proxy, symbol)
+            elif sig_direction == "down" and p5d < -0.015 and prsi > 32:
+                confidence = min(confidence * 1.07, 1.0)
+                logger.debug("Sector %s confirming down — boosting %s SELL", sector_proxy, symbol)
+
+    # 5. Match hypothesis — prefer direction-aligned setup (Improvement 3)
+    hypothesis = await _match_hypothesis(feat_dict, db, signal_direction=sig_direction)
     if not hypothesis:
-        logger.debug("No hypothesis matched — dropping signal %s", signal_id[:8])
+        logger.info("No hypothesis matched for %s/%s feat_keys=%s — dropping %s",
+                    symbol, signal["source"], list(feat_dict.keys()), signal_id[:8])
         return
 
     # 6. Backtest with Sharpe + expectancy gate

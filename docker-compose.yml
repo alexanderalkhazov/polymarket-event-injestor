@@ -119,6 +119,8 @@ services:
     volumes:
       - ./models:/app/models
     depends_on:
+      postgres:
+        condition: service_healthy
       timescale:
         condition: service_healthy
     restart: on-failure
@@ -282,6 +284,72 @@ services:
       - ./models:/app/models
     depends_on:
       timescale:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Gamma Exposure producer (options microstructure GEX signals) ─────────────
+  gamma-producer:
+    build:
+      context: src/event_detectors/gamma_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Short Squeeze scanner (high short float + catalyst = forced cover) ────────
+  short-squeeze-producer:
+    build:
+      context: src/event_detectors/short_squeeze_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Cross-Asset Divergence (correlated pairs that drift apart = mean revert) ──
+  cross-asset-producer:
+    build:
+      context: src/event_detectors/cross_asset_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Earnings alpha producer (pre-earnings setup + post-earnings drift) ───────
+  earnings-producer:
+    build:
+      context: src/event_detectors/earnings_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       data-init:
         condition: service_completed_successfully

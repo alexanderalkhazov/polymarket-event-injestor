@@ -29,30 +29,34 @@ FRED_SERIES = {
 }
 
 ALL_SYMBOLS = [
-    # US equities
-    "SPY", "QQQ", "IWM",
-    "AAPL", "MSFT", "NVDA", "TSLA", "META", "GOOGL", "AMZN", "AMD", "NFLX",
-    "INTC", "CRM", "PLTR", "COIN",
-    # Energy & commodities
-    "USO", "XOM", "XLE", "LNG",
-    "GLD", "SLV", "UNG", "WEAT",
-    # Rates
-    "TLT",
-]
-
-DEV_SYMBOLS = ["SPY", "QQQ", "AAPL"]
+    # Broad-market index ETFs
+    "SPY", "QQQ", "DIA", "IWM", "VTI", "EEM", "ARKK",
+    # Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA",
+    "AMD", "INTC", "CRM", "NFLX", "PLTR", "COIN",
+    # Finance
+    "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+    # Healthcare
+    "JNJ", "UNH", "LLY", "PFE", "ABBV", "AMGN",
+    # Energy
+    "XOM", "CVX", "XLE", "USO", "UNG", "LNG",
+    # Metals & commodities
+    "GLD", "SLV", "IAU", "GDX", "WEAT", "CORN", "DBA",
+    # Bonds / rates
+    "TLT", "IEF", "SHY", "HYG", "AGG", "TIP",
+    # Crypto (yfinance -USD; options fields will be null — handled gracefully)
+    "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD",
+    "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD",
+    "MATIC-USD", "ATOM-USD", "UNI-USD",
+]  # keep in sync with src/config/market_categories.py ALL_SYMBOLS
 
 
 def _symbols() -> list[str]:
-    if os.getenv("DEV_MODE", "false").lower() == "true":
-        return DEV_SYMBOLS
     return ALL_SYMBOLS
 
 
 def _lookback(backfill: bool) -> str:
-    if backfill:
-        return "6mo" if os.getenv("DEV_MODE", "false").lower() == "true" else "10y"
-    return "5d"
+    return "10y" if backfill else "5d"
 
 
 async def ingest_ohlcv(symbols: list[str], tsdb: asyncpg.Connection, backfill: bool) -> None:

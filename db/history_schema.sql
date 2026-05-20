@@ -137,6 +137,36 @@ SELECT create_hypertable('features', 'ts');
 CREATE INDEX features_symbol    ON features (symbol, ts DESC);
 CREATE INDEX features_unlabeled ON features (ts) WHERE forward_return_5d IS NULL;
 
+-- Live signal feature snapshot — captures real-time feature values at the
+-- exact moment a signal fires. These columns are zeroed in the historical
+-- backfill (no archive exists), so the XGBoost model learns to ignore them.
+-- After ~3 months of collection, re-run backfill using this table as the
+-- source of truth for poly/news/options features to get a fully-featured model.
+CREATE TABLE raw_signal_features (
+  ts                       TIMESTAMPTZ NOT NULL,
+  signal_id                UUID NOT NULL,
+  symbol                   TEXT NOT NULL,
+  -- Real-time features that cannot be reconstructed from historical data
+  poly_yes_price           NUMERIC,
+  poly_conviction_delta_1h NUMERIC,
+  poly_conviction_delta_4h NUMERIC,
+  poly_volume_24h          NUMERIC,
+  news_sentiment_1h        NUMERIC,
+  news_sentiment_4h        NUMERIC,
+  news_hotness_peak_4h     NUMERIC,
+  news_article_count_4h    INT,
+  put_call_ratio           NUMERIC,
+  unusual_sweep_count_4h   INT,
+  -- Snapshot of key price/technical features at signal time for context
+  rsi_14                   NUMERIC,
+  macd_histogram           NUMERIC,
+  vol_ratio_30d            NUMERIC,
+  vix_level                NUMERIC,
+  PRIMARY KEY (ts, signal_id)
+);
+SELECT create_hypertable('raw_signal_features', 'ts');
+CREATE INDEX raw_signal_features_symbol ON raw_signal_features (symbol, ts DESC);
+
 -- ── Compression policies (applied to all symbol-keyed hypertables) ──────────
 
 ALTER TABLE features SET (
@@ -181,6 +211,12 @@ ALTER TABLE raw_macro SET (
 );
 SELECT add_compression_policy('raw_macro', INTERVAL '7 days');
 
+ALTER TABLE raw_signal_features SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'symbol'
+);
+SELECT add_compression_policy('raw_signal_features', INTERVAL '7 days');
+
 -- ── Retention policies (drop chunks older than threshold) ────────────────────
 -- Raw source tables: short-lived, only used for feature computation
 SELECT add_retention_policy('raw_news',       INTERVAL '30 days');
@@ -194,3 +230,6 @@ SELECT add_retention_policy('features', INTERVAL '730 days');
 SELECT add_retention_policy('raw_ohlcv',   INTERVAL '10 years');
 SELECT add_retention_policy('raw_macro',   INTERVAL '10 years');
 SELECT add_retention_policy('technicals',  INTERVAL '10 years');
+
+-- Signal feature archive: keep 2 years (needed to build a retrain dataset)
+SELECT add_retention_policy('raw_signal_features', INTERVAL '730 days');
