@@ -39,3 +39,14 @@ Thumbs.db
 
 # Ruff
 .ruff_cache/
+
+# ML model artifacts (run src/ml/train.py locally to generate)
+models/*.json
+models/*.pkl
+
+.claude/
+
+node_modules/
+
+# TypeScript build info
+*.tsbuildinfo

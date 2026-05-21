@@ -1,301 +1,415 @@
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.1
-    env_file:
-      - env/zookeeper.env
-    ports:
-      - "2181:2181"
-
-  kafka:
-    image: confluentinc/cp-kafka:7.6.1
-    depends_on:
-      - zookeeper
+  # ── Message broker ──────────────────────────────────────────────────────────
+  redpanda:
+    image: redpandadata/redpanda:latest
+    platform: linux/arm64
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
     ports:
       - "9092:9092"
-    env_file:
-      - env/kafka.env
+      - "9644:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=localhost:29092"]
+      test: ["CMD", "rpk", "cluster", "health"]
       interval: 5s
       timeout: 10s
       retries: 20
-      start_period: 30s
-
-  mongo:
-    image: mongo:6
-    ports:
-      - "27017:27017"
-    env_file:
-      - env/mongo.env
-    volumes:
-      - mongo-data:/data/db
-
-  mongo-express:
-    image: mongo-express:latest
-    ports:
-      - "8081:8081"
-    env_file:
-      - env/mongo-express.env
-    depends_on:
-      - mongo
-    restart: on-failure
-
-  couchbase:
-    image: couchbase:community-7.6.2
-    ports:
-      - "8091:8091"   # Web UI
-      - "8092:8092"
-      - "8093:8093"   # N1QL
-      - "8094:8094"
-      - "11210:11210" # KV
-    volumes:
-      - couchbase-data:/opt/couchbase/var
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8091/ui/index.html"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
       start_period: 15s
 
-  couchbase-init:
-    image: curlimages/curl:latest
-    depends_on:
-      couchbase:
-        condition: service_healthy
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        echo "Step 1: Setting up node services..."
-        curl -sf -X POST http://couchbase:8091/node/controller/setupServices \
-          -d "services=kv%2Cn1ql%2Cindex" || echo "Services may already be set"
-        sleep 2
-
-        echo "Step 2: Setting memory quotas..."
-        curl -sf -X POST http://couchbase:8091/pools/default \
-          -d "memoryQuota=256" \
-          -d "indexMemoryQuota=256" || echo "Quotas may already be set"
-        sleep 1
-
-        echo "Step 3: Setting admin credentials..."
-        curl -sf -X POST http://couchbase:8091/settings/web \
-          -d "password=password" \
-          -d "username=Administrator" \
-          -d "port=SAME" || echo "Credentials may already be set"
-        sleep 2
-
-        echo "Step 4: Creating bucket 'polymarket'..."
-        curl -sf -X POST http://couchbase:8091/pools/default/buckets \
-          -u Administrator:password \
-          -d "name=polymarket" \
-          -d "ramQuota=128" \
-          -d "bucketType=couchbase" \
-          -d "flushEnabled=1" || echo "Bucket may already exist"
-        sleep 5
-
-        echo "Step 5: Creating named collections..."
-        for COLL in polymarket stock_news stock_analytics; do
-          curl -sf -X POST \
-            "http://couchbase:8091/pools/default/buckets/polymarket/scopes/_default/collections" \
-            -u Administrator:password \
-            -d "name=$$COLL" || echo "Collection $$COLL may already exist"
-          sleep 1
-        done
-
-        echo "Verifying..."
-        curl -sf -u Administrator:password http://couchbase:8091/pools/default/buckets | grep -q polymarket \
-          && echo "Couchbase init COMPLETE — bucket 'polymarket' with collections [polymarket, stock_news, stock_analytics] ready." \
-          || echo "WARNING: bucket verification failed"
-    restart: "no"
-
-  polymarket-event-producer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      mongo:
-        condition: service_started
-    env_file:
-      - env/polymarket-producer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for MongoDB to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check MongoDB..."
-          nc -zv mongo 27017 && break
-          sleep 1
-        done
-        echo "MongoDB is ready!"
-        python -m event_detectors.polymarket_producer
-
-  stock-news-event-producer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      mongo:
-        condition: service_started
-    env_file:
-      - env/stock-news-producer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for MongoDB to be ready..."
-        for idx in {1..30}; do
-          nc -zv mongo 27017 && break
-          sleep 1
-        done
-        echo "MongoDB is ready!"
-        python -m event_detectors.stock_news_producer
-    restart: on-failure
-
-  stock-analytics-event-producer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      mongo:
-        condition: service_started
-    env_file:
-      - env/stock-analytics-producer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for MongoDB to be ready..."
-        for idx in {1..30}; do
-          nc -zv mongo 27017 && break
-          sleep 1
-        done
-        echo "MongoDB is ready!"
-        python -m event_detectors.stock_analytics_producer
-    restart: on-failure
-
-  polymarket-event-consumer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      couchbase-init:
-        condition: service_completed_successfully
-    env_file:
-      - env/polymarket-consumer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for Kafka to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check Kafka..."
-          nc -zv kafka 29092 && break
-          sleep 1
-        done
-        echo "Kafka is ready!"
-        python -m event_processors.polymarket_consumer
-    restart: on-failure
-
-  stock-news-event-consumer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      couchbase-init:
-        condition: service_completed_successfully
-    env_file:
-      - env/stock-news-consumer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for Kafka to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check Kafka..."
-          nc -zv kafka 29092 && break
-          sleep 1
-        done
-        echo "Kafka is ready!"
-        python -m event_processors.stock_news_consumer
-    restart: on-failure
-
-  stock-analytics-event-consumer:
-    build: .
-    depends_on:
-      kafka:
-        condition: service_healthy
-      couchbase-init:
-        condition: service_completed_successfully
-    env_file:
-      - env/stock-analytics-consumer.env
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        echo "Waiting for Kafka to be ready..."
-        for idx in {1..30}; do
-          echo "Attempt $$idx to check Kafka..."
-          nc -zv kafka 29092 && break
-          sleep 1
-        done
-        echo "Kafka is ready!"
-        python -m event_processors.stock_analytics_consumer
-    restart: on-failure
-
-  web-bff-api:
-    build: ./src/web-app/bff
-    depends_on:
-      mongo:
-        condition: service_started
-      couchbase:
-        condition: service_healthy
-    env_file:
-      - env/web-bff.env
+  redpanda-console:
+    image: redpandadata/console:latest
+    platform: linux/arm64
     ports:
-      - "5001:5001"
-    restart: on-failure
-
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    depends_on:
-      - web-bff-api
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=7d
-
-  grafana:
-    image: grafana/grafana:11.1.0
-    depends_on:
-      - prometheus
-    ports:
-      - "3000:3000"
+      - "8080:8080"
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-
-  web-client-ui:
-    build: ./src/web-app/web-client
+      KAFKA_BROKERS: redpanda:9092
     depends_on:
-      - web-bff-api
-    env_file:
-      - env/web-client.env
+      redpanda:
+        condition: service_healthy
+
+  # ── Databases ────────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    platform: linux/arm64
     ports:
-      - "5173:5173"
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eventedge
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/app_schema.sql:/docker-entrypoint-initdb.d/01_app_schema.sql:ro
+    command: postgres -c shared_buffers=128MB -c max_connections=20
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d eventedge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  timescale:
+    image: timescale/timescaledb:latest-pg16
+    platform: linux/arm64
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: market_history
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+      - ./db/history_schema.sql:/docker-entrypoint-initdb.d/01_history_schema.sql:ro
+    command: postgres -c shared_buffers=256MB -c max_connections=20
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d market_history"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    platform: linux/arm64
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    platform: linux/amd64
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      - postgres
+      - timescale
+
+  # ── Cold-start initializer (runs once, blocks dependents until done) ─────────
+  # Checks each step and skips if already populated — safe to re-run.
+  # Step 1: 10-year OHLCV + macro backfill   (if raw_ohlcv < 1000 rows)
+  # Step 2: Labeled feature rows              (if features < 200 labeled rows)
+  # Step 3: Train XGBoost long + short models (if scoring_model.json missing)
+  data-init:
+    build:
+      context: .
+      dockerfile: src/data_init/Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    environment:
+      DEV_MODE: "false"
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
     restart: on-failure
+
+  # ── Python producers ─────────────────────────────────────────────────────────
+  polymarket-producer:
+    build:
+      context: src/event_detectors/polymarket_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  news-producer:
+    build:
+      context: src/event_detectors/news_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analytics-producer:
+    build:
+      context: src/event_detectors/analytics_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sec-producer:
+    build:
+      context: .
+      dockerfile: src/event_detectors/sec_producer/Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Python consumers ─────────────────────────────────────────────────────────
+  polymarket-consumer:
+    build:
+      context: src/event_processors/polymarket_consumer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  news-consumer:
+    build:
+      context: src/event_processors/news_consumer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analytics-consumer:
+    build:
+      context: src/event_processors/analytics_consumer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sec-consumer:
+    build:
+      context: .
+      dockerfile: src/event_processors/sec_consumer/Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Feature store (hourly snapshots + nightly label fill) ───────────────────
+  feature-builder:
+    build:
+      context: src/feature_store
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Historical ingestor (nightly OHLCV + FRED macro) ────────────────────────
+  historical-ingestor:
+    build:
+      context: src/historical
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      timescale:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  # ── ML model retrainer (hourly check, retrains when MIN_TRAIN_SAMPLES reached) ─
+  ml-trainer:
+    build:
+      context: src/ml
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      timescale:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Gamma Exposure producer (options microstructure GEX signals) ─────────────
+  gamma-producer:
+    build:
+      context: src/event_detectors/gamma_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Short Squeeze scanner (high short float + catalyst = forced cover) ────────
+  short-squeeze-producer:
+    build:
+      context: src/event_detectors/short_squeeze_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Cross-Asset Divergence (correlated pairs that drift apart = mean revert) ──
+  cross-asset-producer:
+    build:
+      context: src/event_detectors/cross_asset_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Earnings alpha producer (pre-earnings setup + post-earnings drift) ───────
+  earnings-producer:
+    build:
+      context: src/event_detectors/earnings_producer
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── AI correlator ────────────────────────────────────────────────────────────
+  ai-correlator:
+    build:
+      context: src/ai_correlator
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    volumes:
+      - ./models:/app/models:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Auto-trader (executes strategies automatically via Alpaca) ───────────────
+  auto-trader:
+    build:
+      context: src/auto_trader
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    environment:
+      AUTO_TRADE_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Frontend (Next.js App Router — UI + BFF in one) ─────────────────────────
+  # nextjs:
+  #   build: {context: src/web, dockerfile: Dockerfile}
+  #   platform: linux/arm64
+  #   ports:
+  #     - "3000:3000"
+  #   env_file: env/nextjs.env
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
 volumes:
-  mongo-data:
-  couchbase-data:
-  prometheus-data:
-  grafana-data:
+  redpanda-data:
+  postgres-data:
+  timescale-data:
+  redis-data:
+  pgadmin-data:

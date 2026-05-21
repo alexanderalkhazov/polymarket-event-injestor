@@ -1,0 +1,387 @@
+"""Analytics consumer — probabilistic signal scoring from raw ticker snapshots."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import uuid
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Tuple
+
+import time
+
+import asyncpg
+import redis.asyncio as aioredis
+from confluent_kafka import Consumer, KafkaError
+
+logger = logging.getLogger(__name__)
+
+COOLDOWN_HOURS = float(os.getenv("SIGNAL_COOLDOWN_HOURS", "2"))
+MIN_SIGNAL_SCORE = float(os.getenv("MIN_SIGNAL_SCORE", "0.12"))
+
+# Fallback absolute thresholds — used when no per-symbol baseline is available
+VOLUME_SPIKE_RATIO = 1.6
+PRICE_MOVE_PCT = 3.0
+RSI_OVERBOUGHT = 67.0
+RSI_OVERSOLD   = 33.0
+PC_RATIO_HIGH  = 2.0
+PC_RATIO_LOW   = 0.45
+
+# Z-score threshold for normalized signal gating (top ~5% of distribution)
+Z_SCORE_THRESHOLD = 1.65
+BASELINE_CACHE_TTL = 3600  # refresh per-symbol baselines hourly
+
+
+def _score_volume(ratio: float) -> Tuple[float, str, list]:
+    score = round(min(1.0, (ratio - 1.0) / 6.0), 4)
+    urgency = "high" if score >= 0.6 else "medium" if score >= 0.3 else "low"
+    ci = [round(max(0.0, score - 0.10), 3), round(min(1.0, score + 0.10), 3)]
+    return score, urgency, ci
+
+
+def _score_momentum(pct: float) -> Tuple[float, str, list]:
+    score = round(min(1.0, abs(pct) / 20.0), 4)
+    urgency = "high" if abs(pct) >= 10 else "medium" if abs(pct) >= 5 else "low"
+    ci = [round(max(0.0, score - 0.08), 3), round(min(1.0, score + 0.08), 3)]
+    return score, urgency, ci
+
+
+def _score_rsi(rsi: float) -> Tuple[float, str, list]:
+    distance = round(abs(rsi - 50.0) / 50.0, 4)
+    urgency = "high" if distance >= 0.60 else "medium" if distance >= 0.40 else "low"
+    ci = [round(max(0.0, distance - 0.05), 3), round(min(1.0, distance + 0.05), 3)]
+    return distance, urgency, ci
+
+
+def _score_options(pcr: float) -> Tuple[float, str, list]:
+    score = round(min(1.0, abs(pcr - 1.0) / 4.0), 4)
+    urgency = "high" if score >= 0.6 else "medium" if score >= 0.3 else "low"
+    ci = [round(max(0.0, score - 0.12), 3), round(min(1.0, score + 0.12), 3)]
+    return score, urgency, ci
+
+
+class AnalyticsConsumer:
+    def __init__(
+        self,
+        bootstrap_servers: str,
+        topic: str,
+        group_id: str,
+        database_url: str,
+        timescale_url: str,
+        redis_url: str,
+    ) -> None:
+        self._bootstrap_servers = bootstrap_servers
+        self._topic = topic
+        self._group_id = group_id
+        self._database_url = database_url
+        self._timescale_url = timescale_url
+        self._redis_url = redis_url
+        self._cooldowns: Dict[Tuple[str, str], datetime] = {}
+        self._baselines: Dict[str, tuple] = {}  # ticker → (expiry_ts, data)
+        self._pool: Optional[asyncpg.Pool] = None
+        self._tsdb: Optional[asyncpg.Pool] = None
+        self._redis: Optional[aioredis.Redis] = None
+
+    @classmethod
+    def from_env(cls) -> "AnalyticsConsumer":
+        return cls(
+            bootstrap_servers=os.environ["KAFKA_BOOTSTRAP_SERVERS"],
+            topic=os.getenv("KAFKA_TOPIC", "raw.analytics"),
+            group_id=os.getenv("KAFKA_GROUP_ID", "analytics-consumer"),
+            database_url=os.environ["DATABASE_URL"],
+            timescale_url=os.environ["TIMESCALE_URL"],
+            redis_url=os.getenv("REDIS_URL", "redis://redis:6379"),
+        )
+
+    async def _get_baselines(self, ticker: str) -> dict:
+        """Return per-symbol 60d mean/std for vol_ratio and price_change, cached 1h."""
+        now = time.monotonic()
+        if ticker in self._baselines:
+            expiry, data = self._baselines[ticker]
+            if now < expiry:
+                return data
+        data: dict = {}
+        try:
+            row = await self._tsdb.fetchrow(
+                """SELECT
+                     AVG(vol_ratio_30d)    AS vol_mean,
+                     STDDEV(vol_ratio_30d) AS vol_std,
+                     AVG(price_change_1d)  AS pch_mean,
+                     STDDEV(price_change_1d) AS pch_std
+                   FROM features
+                   WHERE symbol=$1 AND ts > NOW() - INTERVAL '60 days'""",
+                ticker,
+            )
+            if row and row["vol_std"] and float(row["vol_std"]) > 0:
+                data = {
+                    "vol_mean": float(row["vol_mean"] or 1.0),
+                    "vol_std":  float(row["vol_std"]),
+                    "pch_mean": float(row["pch_mean"] or 0.0),
+                    "pch_std":  float(row["pch_std"]  or 2.0),
+                }
+        except Exception as exc:
+            logger.debug("Baseline load failed for %s: %s", ticker, exc)
+        self._baselines[ticker] = (now + BASELINE_CACHE_TTL, data)
+        return data
+
+    def _in_cooldown(self, ticker: str, signal_type: str) -> bool:
+        last = self._cooldowns.get((ticker, signal_type))
+        return last is not None and (datetime.now(timezone.utc) - last).total_seconds() < COOLDOWN_HOURS * 3600
+
+    def _set_cooldown(self, ticker: str, signal_type: str) -> None:
+        self._cooldowns[(ticker, signal_type)] = datetime.now(timezone.utc)
+
+    async def run(self) -> None:
+        self._pool = await asyncpg.create_pool(self._database_url, min_size=1, max_size=5)
+        self._tsdb = await asyncpg.create_pool(self._timescale_url, min_size=1, max_size=3)
+        self._redis = aioredis.from_url(self._redis_url)
+
+        consumer = Consumer({
+            "bootstrap.servers": self._bootstrap_servers,
+            "group.id": self._group_id,
+            "auto.offset.reset": "latest",
+            "enable.auto.commit": True,
+        })
+        consumer.subscribe([self._topic])
+        logger.info("Analytics consumer subscribed to %s", self._topic)
+
+        try:
+            while True:
+                msg = consumer.poll(timeout=1.0)
+                if msg is None:
+                    continue
+                if msg.error():
+                    if msg.error().code() != KafkaError._PARTITION_EOF:
+                        logger.error("Kafka error: %s", msg.error())
+                    continue
+                try:
+                    await self._handle(json.loads(msg.value()))
+                except Exception as exc:
+                    logger.error("Failed to process message: %s", exc)
+        finally:
+            consumer.close()
+            if self._pool:
+                await self._pool.close()
+            if self._tsdb:
+                await self._tsdb.close()
+            if self._redis:
+                await self._redis.aclose()
+
+    async def _handle(self, raw: dict) -> None:
+        ticker = raw.get("ticker", "")
+        now = datetime.now(timezone.utc)
+
+        ts = now
+        if raw.get("fetched_at"):
+            try:
+                ts = datetime.fromisoformat(raw["fetched_at"])
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        # Write price snapshot to raw_ohlcv (close + volume; open/high/low from historical ingestor)
+        current_price = raw.get("current_price")
+        current_volume = raw.get("current_volume")
+        if current_price is not None and current_volume is not None:
+            try:
+                await self._tsdb.execute(
+                    """INSERT INTO raw_ohlcv (ts, symbol, interval, close, volume)
+                       VALUES ($1, $2, '1h', $3, $4) ON CONFLICT DO NOTHING""",
+                    ts, ticker, current_price, int(current_volume),
+                )
+            except Exception as exc:
+                logger.warning("raw_ohlcv write failed: %s", exc)
+
+        # Write options snapshot to raw_options
+        put_vol = raw.get("put_volume")
+        call_vol = raw.get("call_volume")
+        if put_vol is not None or call_vol is not None:
+            try:
+                await self._tsdb.execute(
+                    """INSERT INTO raw_options (ts, symbol, put_volume, call_volume, unusual_sweeps)
+                       VALUES ($1, $2, $3, $4, 0) ON CONFLICT DO NOTHING""",
+                    ts, ticker, put_vol, call_vol,
+                )
+            except Exception as exc:
+                logger.warning("raw_options write failed: %s", exc)
+
+        # Signal detection
+        signals: List[Tuple[str, float, str, list, Optional[str]]] = []
+
+        # Load per-symbol 60d baselines for Z-score normalized thresholds
+        baselines = await self._get_baselines(ticker)
+
+        # Price change is used for both momentum signal and volume-spike direction
+        chg = raw.get("price_change_1d_pct")
+
+        cur_vol = raw.get("current_volume")
+        avg_vol = raw.get("avg_volume_30d")
+        if cur_vol and avg_vol and avg_vol > 0:
+            ratio = cur_vol / avg_vol
+            # Use Z-score gate when baseline available, else fall back to absolute threshold
+            if baselines:
+                vol_z = (ratio - baselines["vol_mean"]) / baselines["vol_std"]
+                vol_spike = vol_z >= Z_SCORE_THRESHOLD
+            else:
+                vol_spike = ratio >= VOLUME_SPIKE_RATIO
+            if vol_spike and not self._in_cooldown(ticker, "volume_spike"):
+                score, urgency, ci = _score_volume(ratio)
+                if score >= MIN_SIGNAL_SCORE:
+                    vol_dir = "up" if (chg or 0) >= 0 else "down"
+                    signals.append(("volume_spike", score, urgency, ci, vol_dir))
+                    self._set_cooldown(ticker, "volume_spike")
+
+        if chg is not None and not self._in_cooldown(ticker, "momentum"):
+            if baselines and baselines["pch_std"] > 0:
+                pch_z = (abs(chg) - abs(baselines["pch_mean"])) / baselines["pch_std"]
+                momentum_trigger = pch_z >= Z_SCORE_THRESHOLD
+            else:
+                momentum_trigger = abs(chg) >= PRICE_MOVE_PCT
+            if momentum_trigger:
+                score, urgency, ci = _score_momentum(chg)
+                if score >= MIN_SIGNAL_SCORE:
+                    direction = "up" if chg > 0 else "down"
+                    signals.append(("momentum", score, urgency, ci, direction))
+                    self._set_cooldown(ticker, "momentum")
+
+        rsi = raw.get("rsi_14")
+        if rsi is not None and not self._in_cooldown(ticker, "rsi_extreme"):
+            if rsi > RSI_OVERBOUGHT or rsi < RSI_OVERSOLD:
+                score, urgency, ci = _score_rsi(rsi)
+                if score >= MIN_SIGNAL_SCORE:
+                    # Oversold (low RSI) = bullish setup; overbought (high RSI) = bearish
+                    direction = "up" if rsi < RSI_OVERSOLD else "down"
+                    signals.append(("rsi_extreme", score, urgency, ci, direction))
+                    self._set_cooldown(ticker, "rsi_extreme")
+
+        pcr = raw.get("put_call_ratio")
+        if pcr is not None and not self._in_cooldown(ticker, "options_unusual"):
+            if pcr >= PC_RATIO_HIGH or pcr <= PC_RATIO_LOW:
+                score, urgency, ci = _score_options(pcr)
+                if score >= MIN_SIGNAL_SCORE:
+                    direction = "down" if pcr >= PC_RATIO_HIGH else "up"
+                    signals.append(("options_unusual", score, urgency, ci, direction))
+                    self._set_cooldown(ticker, "options_unusual")
+
+        # Bollinger Band extremes — price at edge of band signals mean-reversion setup
+        bb_pos = raw.get("bb_position")
+        if bb_pos is not None and not self._in_cooldown(ticker, "bb_signal"):
+            if bb_pos < 0.15:
+                score = round(min(1.0, (0.15 - bb_pos) / 0.15), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("bb_lower_touch", score, "high",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "bb_signal")
+            elif bb_pos > 0.85:
+                score = round(min(1.0, (bb_pos - 0.85) / 0.15), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("bb_upper_touch", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "down"))
+                    self._set_cooldown(ticker, "bb_signal")
+
+        # 52-week high breakout — within 3% of high + volume = institutional accumulation
+        p52w = raw.get("price_vs_52w_high")
+        if p52w is not None and not self._in_cooldown(ticker, "52w_breakout"):
+            if p52w >= 0.97:
+                vol_bonus = 0.20 if (cur_vol and avg_vol and avg_vol > 0
+                                     and cur_vol / avg_vol >= 1.25) else 0.0
+                score = round(min(1.0, 0.35 + (p52w - 0.97) / 0.03 * 0.45 + vol_bonus), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("52w_high_breakout", score, "high",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "52w_breakout")
+
+        # MACD histogram — positive = bullish momentum; negative = bearish
+        macd = raw.get("macd_histogram")
+        if macd is not None and not self._in_cooldown(ticker, "macd_signal"):
+            if macd > 0.005:
+                score = round(min(1.0, macd / 0.08), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("macd_bullish", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "macd_signal")
+            elif macd < -0.005:
+                score = round(min(1.0, abs(macd) / 0.08), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("macd_bearish", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "down"))
+                    self._set_cooldown(ticker, "macd_signal")
+
+        # Stochastic %K extremes
+        stoch = raw.get("stoch_k")
+        if stoch is not None and not self._in_cooldown(ticker, "stoch_signal"):
+            if stoch < 20:
+                score = round(min(1.0, (20 - stoch) / 20), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("stoch_oversold", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "stoch_signal")
+            elif stoch > 80:
+                score = round(min(1.0, (stoch - 80) / 20), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("stoch_overbought", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "down"))
+                    self._set_cooldown(ticker, "stoch_signal")
+
+        # VWAP deviation — price far from intraday VWAP = mean-reversion or momentum signal
+        # > +0.5%: price stretched above VWAP (overbought intraday) → bearish scalp
+        # < -0.5%: price stretched below VWAP (oversold intraday) → bullish scalp
+        vwap_dev = raw.get("vwap_deviation_pct")
+        if vwap_dev is not None and not self._in_cooldown(ticker, "vwap_signal"):
+            abs_dev = abs(vwap_dev)
+            if abs_dev >= 0.5:
+                # Score: 0.5% → ~0.17, 1.0% → 0.33, 3.0% → 1.0
+                score = round(min(1.0, abs_dev / 3.0), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    direction = "down" if vwap_dev > 0 else "up"
+                    urgency = "high" if abs_dev >= 2.0 else "medium"
+                    signals.append(("vwap_extreme", score, urgency,
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], direction))
+                    self._set_cooldown(ticker, "vwap_signal")
+
+        # Options premium flow — directional dollar-weighted conviction
+        # call_put_premium_ratio > 1.5: call buyers dominating → bullish
+        # call_put_premium_ratio < 0.67: put buyers dominating → bearish
+        cpp_ratio = raw.get("call_put_premium_ratio")
+        if cpp_ratio is not None and not self._in_cooldown(ticker, "options_flow"):
+            if cpp_ratio >= 1.5:
+                score = round(min(1.0, (cpp_ratio - 1.0) / 4.0), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("options_call_flow", score, "medium",
+                                    [max(0.0, score - 0.08), min(1.0, score + 0.08)], "up"))
+                    self._set_cooldown(ticker, "options_flow")
+            elif cpp_ratio <= 0.67:
+                score = round(min(1.0, (1.0 - cpp_ratio) / 1.0), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("options_put_flow", score, "medium",
+                                    [max(0.0, score - 0.08), min(1.0, score + 0.08)], "down"))
+                    self._set_cooldown(ticker, "options_flow")
+
+        for signal_type, score, urgency, ci, direction in signals:
+            signal_id = str(uuid.uuid4())
+            payload = {
+                **raw,
+                "signal_score": score,
+                "urgency": urgency,
+                "confidence_interval": ci,
+            }
+            await self._pool.execute(
+                """INSERT INTO signals (id, source, symbol, type, score, direction, payload, created_at)
+                   VALUES ($1, 'analytics', $2, $3, $4, $5, $6, $7)""",
+                uuid.UUID(signal_id),
+                ticker,
+                signal_type,
+                score,
+                direction,
+                json.dumps(payload),
+                now,
+            )
+            await self._redis.publish(
+                "new_signal",
+                json.dumps({"signal_id": signal_id, "source": "analytics", "symbol": ticker}),
+            )
+            logger.info(
+                "Analytics signal: %s %s score=%.3f urgency=%s dir=%s",
+                ticker, signal_type, score, urgency, direction,
+            )

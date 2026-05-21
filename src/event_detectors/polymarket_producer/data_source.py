@@ -324,7 +324,13 @@ class PolymarketClient:
         all_items: List[Dict[str, Any]] = []
 
         for offset in range(0, 100_000, page_size):
-            page = self._fetch_page(offset, page_size)
+            try:
+                page = self._fetch_page(offset, page_size)
+            except PolymarketApiError as exc:
+                if "offset exceeds maximum" in str(exc):
+                    logger.debug("Reached Polymarket pagination limit at offset %d", offset)
+                    break
+                raise
             all_items.extend(page)
             logger.debug("Fetched page offset=%d, got %d markets (total %d)", offset, len(page), len(all_items))
             if len(page) < page_size:
