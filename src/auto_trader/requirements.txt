@@ -1,0 +1,6 @@
+asyncpg>=0.29
+redis[asyncio]>=5.0
+alpaca-py>=0.28.0
+yfinance>=0.2.40
+pandas>=2.2
+python-dotenv>=1.0.0

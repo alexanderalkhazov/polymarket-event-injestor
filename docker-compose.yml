@@ -375,6 +375,24 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # ── Auto-trader (executes strategies automatically via Alpaca) ───────────────
+  auto-trader:
+    build:
+      context: src/auto_trader
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    env_file: env/python.env
+    environment:
+      AUTO_TRADE_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   # ── Frontend (Next.js App Router — UI + BFF in one) ─────────────────────────
   # nextjs:
   #   build: {context: src/web, dockerfile: Dockerfile}

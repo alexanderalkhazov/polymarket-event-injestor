@@ -55,6 +55,14 @@ MIN_SAMPLE_SIZE      = int(os.getenv("MIN_SAMPLE_SIZE", "30"))  # hard floor —
 QUALITY_TIER_B       = float(os.getenv("QUALITY_TIER_B", "0.70"))   # below → drop
 QUALITY_TIER_A       = float(os.getenv("QUALITY_TIER_A", "0.75"))   # A gets full size
 
+# Scalp mode — bypass multi-day backtest; use tight TP/SL and 20-min hold window
+SCALP_MODE              = os.getenv("SCALP_MODE", "false").lower() == "true"
+SCALP_HOLD_MINUTES      = int(os.getenv("SCALP_HOLD_MINUTES",      "20"))
+SCALP_TP_PCT            = float(os.getenv("SCALP_TP_PCT",          "0.005"))
+SCALP_SL_PCT            = float(os.getenv("SCALP_SL_PCT",          "0.003"))
+SCALP_DEDUP_SECONDS     = int(os.getenv("SCALP_DEDUP_SECONDS",     "10"))
+SCALP_CONF_THRESHOLD    = float(os.getenv("SCALP_CONFIDENCE_THRESHOLD", "0.50"))
+
 _MODEL_DIR   = Path(os.getenv("MODEL_DIR", "/app/models"))
 MODEL_PATH   = _MODEL_DIR / "scoring_model.json"
 MODEL_SHORT  = _MODEL_DIR / "scoring_model_short.json"
@@ -335,8 +343,6 @@ async def _run_sprt_loop(db: asyncpg.Pool, tsdb: asyncpg.Pool) -> None:
 _DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 
 def _is_market_open() -> bool:
-    if _DEV_MODE:
-        return True
     now = datetime.now(_ET)
     if now.weekday() >= 5:
         return False
@@ -391,22 +397,66 @@ async def _is_near_earnings(symbol: str, db: asyncpg.Pool) -> bool:
 
 
 async def _get_market_regime(tsdb: asyncpg.Pool, redis=None) -> dict:
+    """5-state HMM-inspired regime detection.
+
+    States: strong_bull, bull, sideways, bear, strong_bear
+    Each state maps to trend ("bull"/"sideways"/"bear") for backward compatibility
+    with REGIME_THRESHOLD lookup, but also exposes the 5-state label and momentum
+    score for finer confidence adjustments.
+    """
     result = {
         "trend": "sideways", "volatility": "elevated",
         "vix": None, "spy_vs_200d_pct": None,
-        "dealer_gamma": "unknown",  # positive / negative / unknown
+        "regime_state": "sideways",  # 5-state label
+        "momentum_score": 0.0,       # −1 to +1 aggregate trend momentum
+        "dealer_gamma": "unknown",
     }
     try:
         spy_rows = await tsdb.fetch(
             "SELECT close FROM raw_ohlcv WHERE symbol='SPY' AND interval='1d' ORDER BY ts DESC LIMIT 200"
         )
-        if len(spy_rows) >= 20:
+        if len(spy_rows) >= 50:
             closes  = [float(r["close"]) for r in spy_rows]
             current = closes[0]
-            sma200  = sum(closes) / len(closes)
-            pct     = (current - sma200) / sma200 * 100
+
+            # Multiple moving averages for smoother state transitions
+            sma50   = sum(closes[:50])  / 50
+            sma200  = sum(closes)       / len(closes)
+            sma20   = sum(closes[:20])  / 20
+
+            pct200  = (current - sma200) / sma200 * 100
+            pct50   = (current - sma50)  / sma50  * 100
+            pct20   = (current - sma20)  / sma20  * 100
+
+            result["spy_vs_200d_pct"] = round(pct200, 2)
+
+            # Momentum score: weighted blend of 20/50/200d deviations
+            momentum = (0.5 * pct20 + 0.3 * pct50 + 0.2 * pct200) / 10.0  # normalise to ≈[-1,1]
+            momentum = max(-1.0, min(1.0, momentum))
+            result["momentum_score"] = round(momentum, 3)
+
+            # 5-state classifier
+            if pct200 > 5 and pct50 > 0 and pct20 > 0:
+                state, trend = "strong_bull", "bull"
+            elif pct200 > 2:
+                state, trend = "bull",        "bull"
+            elif pct200 > -2:
+                state, trend = "sideways",    "sideways"
+            elif pct200 > -5:
+                state, trend = "bear",        "bear"
+            else:
+                state, trend = "strong_bear", "bear"
+
+            result["regime_state"] = state
+            result["trend"]        = trend
+
+        elif len(spy_rows) >= 20:
+            closes  = [float(r["close"]) for r in spy_rows]
+            sma20   = sum(closes) / len(closes)
+            pct     = (closes[0] - sma20) / sma20 * 100
             result["spy_vs_200d_pct"] = round(pct, 2)
             result["trend"] = "bull" if pct > 2 else ("bear" if pct < -2 else "sideways")
+            result["regime_state"] = result["trend"]
 
         vix_row = await tsdb.fetchrow(
             "SELECT value FROM raw_macro WHERE series_id='VIXCLS' ORDER BY ts DESC LIMIT 1"
@@ -414,14 +464,23 @@ async def _get_market_regime(tsdb: asyncpg.Pool, redis=None) -> dict:
         if vix_row:
             vix = float(vix_row["value"])
             result["vix"] = vix
-            result["volatility"] = "low" if vix < 18 else ("high" if vix >= 28 else "elevated")
+            if vix < 15:
+                result["volatility"] = "low"
+            elif vix < 20:
+                result["volatility"] = "normal"
+            elif vix < 28:
+                result["volatility"] = "elevated"
+            else:
+                result["volatility"] = "high"
+
+            # Override regime to strong_bear when VIX spikes regardless of price level
+            # (crisis regimes — VIX > 35 — change correlation structure dramatically)
+            if vix > 35 and result["trend"] != "bull":
+                result["regime_state"] = "strong_bear"
+
     except Exception as exc:
         logger.warning("Regime detection failed: %s", exc)
 
-    # GEX from Redis — written by gamma-producer every 30 min.
-    # Negative dealer gamma means market makers must buy into rallies and sell into
-    # dips (short gamma hedging), which amplifies directional moves. This is critical
-    # context for sizing: squeeze setups are MORE explosive in negative GEX regimes.
     if redis is not None:
         try:
             gex_raw = await redis.get("gex:SPY")
@@ -774,10 +833,12 @@ async def run() -> None:
     logger.info("AI correlator subscribed to new_signal")
 
     # Replay signals from the last 6 hours that arrived while the correlator was
-    # waiting for data-init to complete. Redis pub/sub is fire-and-forget — any
-    # messages published before this subscription are gone. Replaying from the DB
-    # ensures the post-data-init startup always has signals to process.
-    asyncio.create_task(_replay_startup_signals(db, redis))
+    # waiting for data-init to complete. Disabled in SCALP_MODE — stale signals
+    # must not create entries; only live real-time signals should trigger trades.
+    if not SCALP_MODE:
+        asyncio.create_task(_replay_startup_signals(db, redis))
+    else:
+        logger.info("SCALP_MODE: startup replay disabled — real-time signals only")
 
     # Polymarket produces 5–30 signals/minute per ticker. Without clustering, each
     # triggers a full pipeline (XGBoost + Claude + DB writes). Cluster them: buffer
@@ -856,6 +917,25 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
             return
         feat_dict = dict(feat_row)
 
+        # Enrich feat_dict with live values from the signal payload. The analytics
+        # producer computes bb_position, macd_histogram, stoch_k, price_vs_52w_high
+        # at signal time — these are fresher and more accurate than the hourly
+        # feature snapshot, so they should take precedence for hypothesis matching.
+        _sig_payload = signal.get("payload") or {}
+        if isinstance(_sig_payload, str):
+            _sig_payload = json.loads(_sig_payload)
+        for _live_field in (
+            "bb_position", "macd_histogram", "stoch_k", "price_vs_52w_high",
+            "rsi_14", "put_call_ratio", "price_change_1d",
+            "vwap_deviation_pct", "call_put_premium_ratio",
+        ):
+            _live_val = _sig_payload.get(_live_field)
+            if _live_val is not None:
+                try:
+                    feat_dict[_live_field] = float(_live_val)
+                except (TypeError, ValueError):
+                    pass
+
         # Archive the real-time feature snapshot for this signal. These values
         # (poly_yes_price, news_sentiment_1h, put_call_ratio, etc.) are zeroed
         # in the historical backfill — capturing them here builds a dataset that
@@ -919,6 +999,27 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     if signal["source"] == "polymarket":
         confidence     = raw_signal_score
         top_features: list[dict] = []
+
+        # OFI confirmation: when order flow imbalance aligns with conviction direction,
+        # the move is backed by real money (not noise). Misaligned OFI = fade signal.
+        _poly_payload = signal.get("payload") or {}
+        if isinstance(_poly_payload, str):
+            _poly_payload = json.loads(_poly_payload)
+        _ofi = _poly_payload.get("ofi")
+        if _ofi is not None:
+            _ofi = float(_ofi)
+            if sig_direction == "up" and _ofi > 0.3:
+                confidence = min(confidence * 1.15, 1.0)
+                logger.debug("OFI=%.2f confirms bullish conviction for %s (+15%%)", _ofi, symbol)
+            elif sig_direction == "down" and _ofi < -0.3:
+                confidence = min(confidence * 1.15, 1.0)
+                logger.debug("OFI=%.2f confirms bearish conviction for %s (+15%%)", _ofi, symbol)
+            elif sig_direction == "up" and _ofi < -0.2:
+                confidence *= 0.85
+                logger.info("OFI=%.2f contradicts bullish signal for %s (-15%%)", _ofi, symbol)
+            elif sig_direction == "down" and _ofi > 0.2:
+                confidence *= 0.85
+                logger.info("OFI=%.2f contradicts bearish signal for %s (-15%%)", _ofi, symbol)
     else:
         xgb_confidence, top_features = _score(feat_dict, direction=sig_direction)
         # Improvement 1: blend raw signal score (producer's quality assessment) with
@@ -959,13 +1060,19 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
 
     # 3.5. Market regime (includes GEX from Redis when gamma-producer is running)
     regime = await _get_market_regime(tsdb, redis)
-    logger.info("Regime: trend=%s vol=%s vix=%s dealer_gamma=%s",
+    logger.info("Regime: state=%s trend=%s vol=%s vix=%s momentum=%.2f dealer_gamma=%s",
+                regime.get("regime_state", regime["trend"]),
                 regime["trend"], regime["volatility"], regime["vix"],
+                regime.get("momentum_score", 0.0),
                 regime.get("dealer_gamma", "unknown"))
 
-    # 4. Confidence gate (regime-adjusted)
+    # 4. Confidence gate — scalp mode uses a lower threshold (no regime adjustment needed
+    # on a 20-min timeframe where macro trends are irrelevant)
     direction_key = "sell" if sig_direction == "down" else "buy"
-    threshold = REGIME_THRESHOLD.get((regime["trend"], direction_key), CONFIDENCE_THRESHOLD)
+    if SCALP_MODE:
+        threshold = SCALP_CONF_THRESHOLD
+    else:
+        threshold = REGIME_THRESHOLD.get((regime["trend"], direction_key), CONFIDENCE_THRESHOLD)
     if confidence < threshold:
         logger.info("Confidence %.3f below threshold %.3f (regime=%s/%s) — dropping %s",
                     confidence, threshold, regime["trend"], direction_key, signal_id[:8])
@@ -983,34 +1090,47 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
     await redis.sadd(src_key, signal_channel)
     await redis.expire(src_key, 86400)
 
-    # 4.5. Symbol dedup — prevents signal bursts becoming duplicate opportunities
-    if signal["source"] == "polymarket":
-        # Dedup on the primary symbol only (4h window).
-        # Do NOT check matched_tickers — those span many unrelated assets and cause
-        # cross-symbol dedup (e.g. a GLD signal blocked because SPY was in matched_tickers).
+    # 4.5. Symbol dedup — prevents signal bursts becoming duplicate opportunities.
+    # Direction-aware: a SELL signal always passes through even if a BUY was just created
+    # (and vice versa), so an opposing signal can flip/close an existing position.
+    _cur_action = "buy" if sig_direction == "up" else "sell"
+    if SCALP_MODE:
         recent = await db.fetchrow(
-            """SELECT id FROM opportunities
-               WHERE $1 = ANY(tickers) AND created_at > NOW()-INTERVAL '4 hours' LIMIT 1""",
-            symbol,
+            f"""SELECT id FROM opportunities
+               WHERE $1 = ANY(tickers)
+                 AND action = $2
+                 AND created_at > NOW()-INTERVAL '{SCALP_DEDUP_SECONDS} seconds' LIMIT 1""",
+            symbol, _cur_action,
         )
         if recent:
-            logger.debug("Dedup: polymarket opp for %s in last 4h — skipping", symbol)
+            logger.debug("Dedup (scalp): opp for %s/%s in last %ds — skipping", symbol, _cur_action, SCALP_DEDUP_SECONDS)
+            return
+    elif signal["source"] == "polymarket":
+        recent = await db.fetchrow(
+            """SELECT id FROM opportunities
+               WHERE $1 = ANY(tickers) AND action = $2
+                 AND created_at > NOW()-INTERVAL '4 hours' LIMIT 1""",
+            symbol, _cur_action,
+        )
+        if recent:
+            logger.debug("Dedup: polymarket opp for %s/%s in last 4h — skipping", symbol, _cur_action)
             return
     else:
         recent = await db.fetchrow(
             """SELECT id FROM opportunities
-               WHERE $1 = ANY(tickers) AND created_at > NOW()-INTERVAL '6 hours' LIMIT 1""",
-            symbol,
+               WHERE $1 = ANY(tickers) AND action = $2
+                 AND created_at > NOW()-INTERVAL '6 hours' LIMIT 1""",
+            symbol, _cur_action,
         )
         if recent:
-            logger.debug("Dedup: opportunity for %s in last 6h — skipping", symbol)
+            logger.debug("Dedup: opportunity for %s/%s in last 6h — skipping", symbol, _cur_action)
             return
 
-    # 4.6. Earnings guard — bypass for earnings-specific signal types so the
-    # earnings producer's own signals aren't eaten by the guard they're meant to exploit.
+    # 4.6. Earnings guard — irrelevant on a 20-minute scalp timeframe; only applies to
+    # multi-day holds. Bypass entirely in SCALP_MODE.
     _sig_type = signal.get("type", "")
     _earnings_signal = _sig_type in ("earnings_setup", "earnings_drift")
-    if signal["source"] != "polymarket" and not _earnings_signal:
+    if not SCALP_MODE and signal["source"] != "polymarket" and not _earnings_signal:
         if await _is_near_earnings(symbol, db):
             logger.info("Earnings within %d days for %s — skipping", EARNINGS_GUARD_DAYS, symbol)
             return
@@ -1069,6 +1189,32 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
                 confidence = min(confidence * 1.07, 1.0)
                 logger.debug("Sector %s confirming down — boosting %s SELL", sector_proxy, symbol)
 
+    # 4.9. VWAP filter — price far above VWAP on a buy = chasing; far below on a sell = chasing.
+    # Mean-reversion bias: fade extreme VWAP deviations, follow moderate ones.
+    vwap_dev = feat_dict.get("vwap_deviation_pct")
+    if vwap_dev is not None and not SCALP_MODE:
+        vwap_dev = float(vwap_dev)
+        if sig_direction == "up" and vwap_dev > 1.5:
+            # Price is > 1.5% above VWAP — buying here is chasing; reduce conviction
+            confidence *= 0.80
+            logger.info("VWAP: %s is %.2f%% above VWAP — reducing BUY conf", symbol, vwap_dev)
+        elif sig_direction == "up" and vwap_dev > 0.5:
+            confidence *= 0.92
+            logger.debug("VWAP: %s +%.2f%% above VWAP — mild BUY penalty", symbol, vwap_dev)
+        elif sig_direction == "down" and vwap_dev < -1.5:
+            confidence *= 0.80
+            logger.info("VWAP: %s is %.2f%% below VWAP — reducing SELL conf", symbol, vwap_dev)
+        elif sig_direction == "down" and vwap_dev < -0.5:
+            confidence *= 0.92
+            logger.debug("VWAP: %s %.2f%% below VWAP — mild SELL penalty", symbol, vwap_dev)
+        elif sig_direction == "up" and vwap_dev < -0.3:
+            # Buying below VWAP: favorable mean-reversion setup — small boost
+            confidence = min(confidence * 1.06, 1.0)
+            logger.debug("VWAP: %s %.2f%% below VWAP — BUY near support boost", symbol, vwap_dev)
+        elif sig_direction == "down" and vwap_dev > 0.3:
+            confidence = min(confidence * 1.06, 1.0)
+            logger.debug("VWAP: %s +%.2f%% above VWAP — SELL near resistance boost", symbol, vwap_dev)
+
     # 5. Match hypothesis — prefer direction-aligned setup (Improvement 3)
     hypothesis = await _match_hypothesis(feat_dict, db, signal_direction=sig_direction)
     if not hypothesis:
@@ -1076,11 +1222,32 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
                     symbol, signal["source"], list(feat_dict.keys()), signal_id[:8])
         return
 
-    # 6. Backtest with Sharpe + expectancy gate
-    bt = await _run_backtest(signal, hypothesis, symbol, tsdb, db, signal_ts=signal.get("created_at"))
-    if not bt["passed"]:
-        logger.info("Backtest failed for %s: %s", symbol, bt.get("drop_reason"))
-        return
+    # 6. Backtest with Sharpe + expectancy gate.
+    # In SCALP_MODE, multi-day backtests are meaningless for 20-min holds — skip and
+    # use synthetic targets instead (0.5% TP, 0.3% SL, 55% assumed win rate).
+    if SCALP_MODE:
+        exp_val = (SCALP_TP_PCT * 100 * 0.55) - (SCALP_SL_PCT * 100 * 0.45)
+        bt = {
+            "passed":                   True,
+            "id":                       None,
+            "sample_size":              0,
+            "win_rate":                 0.55,
+            "avg_return_pct":           round(SCALP_TP_PCT * 100, 4),
+            "avg_win_pct":              round(SCALP_TP_PCT * 100, 4),
+            "avg_loss_pct":             round(-SCALP_SL_PCT * 100, 4),
+            "median_return_pct":        round(SCALP_TP_PCT * 100, 4),
+            "sharpe":                   1.5,
+            "expectancy":               round(exp_val, 4),
+            "holding_period_optimal":   "scalp",
+            "max_drawdown_pct":         round(SCALP_SL_PCT * 100, 4),
+            "drop_reason":              None,
+            "strategy_name":            "scalp",
+        }
+    else:
+        bt = await _run_backtest(signal, hypothesis, symbol, tsdb, db, signal_ts=signal.get("created_at"))
+        if not bt["passed"]:
+            logger.info("Backtest failed for %s: %s", symbol, bt.get("drop_reason"))
+            return
 
     # 7. Quality tier gate — Tier C signals are too weak for the LLM pipeline
     quality = _signal_quality(confidence)
@@ -1166,11 +1333,13 @@ async def _process(signal_id: str, db: asyncpg.Pool, tsdb: asyncpg.Pool, redis) 
         sig_direction = hypothesis.get("direction", "up")
     action = "buy" if sig_direction == "up" else "sell"
 
-    # Use backtest-optimal holding period rather than hypothesis default
-    hold_days = _HOLD_TO_DAYS.get(bt.get("holding_period_optimal", "5d"), 5)
-
-    # Dynamic stop loss: VIX-regime + per-symbol volatility
-    stop_loss_pct = _dynamic_stop_loss(feat_dict, regime)
+    # Use backtest-optimal holding period; scalp mode forces 0 (20-min window in fan_out)
+    if SCALP_MODE:
+        hold_days     = 0
+        stop_loss_pct = SCALP_SL_PCT
+    else:
+        hold_days     = _HOLD_TO_DAYS.get(bt.get("holding_period_optimal", "5d"), 5)
+        stop_loss_pct = _dynamic_stop_loss(feat_dict, regime)
 
     if signal["source"] == "polymarket":
         raw_payload = signal.get("payload") or {}

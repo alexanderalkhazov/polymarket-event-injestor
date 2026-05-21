@@ -16,16 +16,16 @@ from confluent_kafka import Consumer, KafkaError
 
 logger = logging.getLogger(__name__)
 
-COOLDOWN_HOURS = 4
-MIN_SIGNAL_SCORE = 0.15
+COOLDOWN_HOURS = float(os.getenv("SIGNAL_COOLDOWN_HOURS", "2"))
+MIN_SIGNAL_SCORE = float(os.getenv("MIN_SIGNAL_SCORE", "0.12"))
 
 # Fallback absolute thresholds — used when no per-symbol baseline is available
-VOLUME_SPIKE_RATIO = 1.8
-PRICE_MOVE_PCT = 4.0
-RSI_OVERBOUGHT = 72.0
-RSI_OVERSOLD = 28.0
-PC_RATIO_HIGH = 2.5
-PC_RATIO_LOW = 0.40
+VOLUME_SPIKE_RATIO = 1.6
+PRICE_MOVE_PCT = 3.0
+RSI_OVERBOUGHT = 67.0
+RSI_OVERSOLD   = 33.0
+PC_RATIO_HIGH  = 2.0
+PC_RATIO_LOW   = 0.45
 
 # Z-score threshold for normalized signal gating (top ~5% of distribution)
 Z_SCORE_THRESHOLD = 1.65
@@ -263,6 +263,100 @@ class AnalyticsConsumer:
                     direction = "down" if pcr >= PC_RATIO_HIGH else "up"
                     signals.append(("options_unusual", score, urgency, ci, direction))
                     self._set_cooldown(ticker, "options_unusual")
+
+        # Bollinger Band extremes — price at edge of band signals mean-reversion setup
+        bb_pos = raw.get("bb_position")
+        if bb_pos is not None and not self._in_cooldown(ticker, "bb_signal"):
+            if bb_pos < 0.15:
+                score = round(min(1.0, (0.15 - bb_pos) / 0.15), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("bb_lower_touch", score, "high",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "bb_signal")
+            elif bb_pos > 0.85:
+                score = round(min(1.0, (bb_pos - 0.85) / 0.15), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("bb_upper_touch", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "down"))
+                    self._set_cooldown(ticker, "bb_signal")
+
+        # 52-week high breakout — within 3% of high + volume = institutional accumulation
+        p52w = raw.get("price_vs_52w_high")
+        if p52w is not None and not self._in_cooldown(ticker, "52w_breakout"):
+            if p52w >= 0.97:
+                vol_bonus = 0.20 if (cur_vol and avg_vol and avg_vol > 0
+                                     and cur_vol / avg_vol >= 1.25) else 0.0
+                score = round(min(1.0, 0.35 + (p52w - 0.97) / 0.03 * 0.45 + vol_bonus), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("52w_high_breakout", score, "high",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "52w_breakout")
+
+        # MACD histogram — positive = bullish momentum; negative = bearish
+        macd = raw.get("macd_histogram")
+        if macd is not None and not self._in_cooldown(ticker, "macd_signal"):
+            if macd > 0.005:
+                score = round(min(1.0, macd / 0.08), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("macd_bullish", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "macd_signal")
+            elif macd < -0.005:
+                score = round(min(1.0, abs(macd) / 0.08), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("macd_bearish", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "down"))
+                    self._set_cooldown(ticker, "macd_signal")
+
+        # Stochastic %K extremes
+        stoch = raw.get("stoch_k")
+        if stoch is not None and not self._in_cooldown(ticker, "stoch_signal"):
+            if stoch < 20:
+                score = round(min(1.0, (20 - stoch) / 20), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("stoch_oversold", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "up"))
+                    self._set_cooldown(ticker, "stoch_signal")
+            elif stoch > 80:
+                score = round(min(1.0, (stoch - 80) / 20), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("stoch_overbought", score, "medium",
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], "down"))
+                    self._set_cooldown(ticker, "stoch_signal")
+
+        # VWAP deviation — price far from intraday VWAP = mean-reversion or momentum signal
+        # > +0.5%: price stretched above VWAP (overbought intraday) → bearish scalp
+        # < -0.5%: price stretched below VWAP (oversold intraday) → bullish scalp
+        vwap_dev = raw.get("vwap_deviation_pct")
+        if vwap_dev is not None and not self._in_cooldown(ticker, "vwap_signal"):
+            abs_dev = abs(vwap_dev)
+            if abs_dev >= 0.5:
+                # Score: 0.5% → ~0.17, 1.0% → 0.33, 3.0% → 1.0
+                score = round(min(1.0, abs_dev / 3.0), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    direction = "down" if vwap_dev > 0 else "up"
+                    urgency = "high" if abs_dev >= 2.0 else "medium"
+                    signals.append(("vwap_extreme", score, urgency,
+                                    [max(0.0, score - 0.05), min(1.0, score + 0.05)], direction))
+                    self._set_cooldown(ticker, "vwap_signal")
+
+        # Options premium flow — directional dollar-weighted conviction
+        # call_put_premium_ratio > 1.5: call buyers dominating → bullish
+        # call_put_premium_ratio < 0.67: put buyers dominating → bearish
+        cpp_ratio = raw.get("call_put_premium_ratio")
+        if cpp_ratio is not None and not self._in_cooldown(ticker, "options_flow"):
+            if cpp_ratio >= 1.5:
+                score = round(min(1.0, (cpp_ratio - 1.0) / 4.0), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("options_call_flow", score, "medium",
+                                    [max(0.0, score - 0.08), min(1.0, score + 0.08)], "up"))
+                    self._set_cooldown(ticker, "options_flow")
+            elif cpp_ratio <= 0.67:
+                score = round(min(1.0, (1.0 - cpp_ratio) / 1.0), 4)
+                if score >= MIN_SIGNAL_SCORE:
+                    signals.append(("options_put_flow", score, "medium",
+                                    [max(0.0, score - 0.08), min(1.0, score + 0.08)], "down"))
+                    self._set_cooldown(ticker, "options_flow")
 
         for signal_type, score, urgency, ci, direction in signals:
             signal_id = str(uuid.uuid4())

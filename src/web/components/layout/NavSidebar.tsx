@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useEffect, useState } from "react"
 
 const NAV = [
   { href: "/",       label: "Strategies", icon: "⬡" },
@@ -12,8 +13,23 @@ const BOTTOM = [
   { href: "/settings", label: "Settings", icon: "⚙" },
 ]
 
+type MarketStatus = { open: boolean; session: string; time: string; nextEvent: string }
+
+function useMarketStatus() {
+  const [status, setStatus] = useState<MarketStatus | null>(null)
+  useEffect(() => {
+    const fetch_ = () =>
+      fetch("/api/market-status").then(r => r.json()).then(setStatus).catch(() => {})
+    fetch_()
+    const id = setInterval(fetch_, 30_000)
+    return () => clearInterval(id)
+  }, [])
+  return status
+}
+
 export function NavSidebar() {
   const pathname = usePathname()
+  const market   = useMarketStatus()
 
   return (
     <nav style={{
@@ -59,6 +75,40 @@ export function NavSidebar() {
       ))}
 
       <div style={{ flex: 1 }} />
+
+      {/* Market status indicator */}
+      {market && (
+        <div style={{
+          margin: "0 4px 8px",
+          padding: "10px 12px",
+          borderRadius: 10,
+          background: market.open
+            ? "rgba(34,197,94,0.12)"
+            : "rgba(239,68,68,0.10)",
+          border: `1px solid ${market.open ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.2)"}`,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+              background: market.open ? "#22c55e" : "#ef4444",
+              boxShadow: market.open ? "0 0 6px #22c55e" : "0 0 6px #ef4444",
+            }} />
+            <span style={{
+              fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
+              color: market.open ? "#4ade80" : "#f87171",
+              textTransform: "uppercase",
+            }}>
+              {market.open ? "Market Open" : market.session === "pre" ? "Pre-Market" : market.session === "after" ? "After-Hours" : "Market Closed"}
+            </span>
+          </div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", paddingLeft: 15 }}>
+            {market.time}
+          </div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", paddingLeft: 15, marginTop: 2 }}>
+            {market.open ? `Closes ${market.nextEvent}` : `Opens ${market.nextEvent}`}
+          </div>
+        </div>
+      )}
 
       <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
 

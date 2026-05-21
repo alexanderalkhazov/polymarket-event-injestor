@@ -6,9 +6,10 @@ import logging
 import os
 import re
 import uuid
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
+from typing import Deque, Dict, Optional, Tuple
 
 import time
 
@@ -110,11 +111,33 @@ def _score_conviction(
     return score, urgency, ci
 
 
+OFI_WINDOW = 10  # number of ticks to include in OFI rolling window
+
+
+def _compute_ofi(ofi_ticks: "Deque[tuple[float, float]]") -> Optional[float]:
+    """Order Flow Imbalance from rolling (signed_price_delta × volume) ticks.
+
+    Each tick = (signed_delta, volume) where signed_delta is positive for price
+    increases (buyers won) and negative for decreases (sellers won).
+    Returns a value in [-1, 1]: positive = net buying, negative = net selling.
+    """
+    if not ofi_ticks:
+        return None
+    total_vol = sum(abs(v) for _, v in ofi_ticks)
+    if total_vol <= 0:
+        return None
+    net_flow = sum(d * v for d, v in ofi_ticks)
+    return round(net_flow / total_vol, 4)
+
+
 @dataclass
 class MarketState:
     last_yes_price: Optional[float] = None
     last_direction: Optional[str] = None
     direction_streak: int = 0
+    ofi_ticks: Deque[tuple[float, float]] = field(
+        default_factory=lambda: deque(maxlen=OFI_WINDOW)
+    )
 
 
 class PolymarketConsumer:
@@ -210,6 +233,11 @@ class PolymarketConsumer:
         change_abs = abs(yes_price - prev)
         change_pct = change_abs / prev if prev > 0 else 0.0
 
+        # Track signed price delta × volume for OFI computation
+        signed_delta = yes_price - prev
+        tick_vol = float(raw.get("volume") or 0) or change_abs  # fallback to abs delta as proxy
+        state.ofi_ticks.append((signed_delta, tick_vol))
+
         # Only persist price ticks that actually moved — avoids writing every poll snapshot
         if change_abs >= 0.001:
             try:
@@ -279,6 +307,8 @@ class PolymarketConsumer:
         # All gates passed — lock this market out for MARKET_COOLDOWN_S
         self._last_signal_ts[market_id] = now_ts
 
+        ofi = _compute_ofi(state.ofi_ticks)
+
         signal_id = str(uuid.uuid4())
         payload = {
             "market_id": market_id,
@@ -293,6 +323,7 @@ class PolymarketConsumer:
             "urgency": urgency,
             "confidence_interval": ci,
             "matched_tickers": matched_tickers,
+            "ofi": ofi,  # Order Flow Imbalance: positive=buy pressure, negative=sell pressure
         }
 
         # Use the primary matched ticker as the signal symbol so the backtester can

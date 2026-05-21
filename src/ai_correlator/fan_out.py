@@ -57,7 +57,12 @@ SECTOR_MAP: dict[str, str] = {
     "BTC-USD": "crypto", "ETH-USD": "crypto", "SOL-USD": "crypto",
 }
 
-_HOLD_TO_INTERVAL = {3: "3 days", 5: "5 days", 10: "10 days"}
+_HOLD_TO_INTERVAL = {0: "20 minutes", 3: "3 days", 5: "5 days", 10: "10 days"}
+
+SCALP_MODE         = os.getenv("SCALP_MODE", "false").lower() == "true"
+SCALP_TP           = float(os.getenv("SCALP_TP_PCT", "0.005"))
+SCALP_SL           = float(os.getenv("SCALP_SL_PCT", "0.003"))
+SCALP_HOLD_MINUTES = int(os.getenv("SCALP_HOLD_MINUTES", "20"))
 
 
 # ── Math helpers ──────────────────────────────────────────────────────────────
@@ -175,7 +180,8 @@ async def fan_out_to_users(opp: dict, db, redis, regime: dict | None = None) -> 
         )
 
     vol_factor  = VOL_SIZE_FACTOR.get((regime or {}).get("volatility", "elevated"), 0.8)
-    hold_days   = int(opp.get("hold_days") or 5)
+    _raw_hold   = opp.get("hold_days")
+    hold_days   = int(_raw_hold) if _raw_hold is not None else 5
     hold_label  = _HOLD_TO_INTERVAL.get(hold_days, "5 days")
     sector      = SECTOR_MAP.get(primary_ticker or "", "other")
     opp_sharpe  = float(opp.get("sharpe") or 0)
@@ -235,19 +241,26 @@ async def fan_out_to_users(opp: dict, db, redis, regime: dict | None = None) -> 
                 logger.debug("User %s at sector cap for '%s' — skipping", user_id, sector)
                 continue
 
-        # ── Bayesian Kelly sizing ─────────────────────────────────────────────
-        pct = _kelly_size(
-            sample_size  = sample_size,
-            win_rate     = win_rate,
-            avg_win_pct  = avg_win_pct,
-            avg_loss_pct = avg_loss_pct,
-            risk_level   = risk_level,
-            max_pos_pct  = max_pos_pct,
-            vol_factor   = vol_factor,
-        )
-        # Tier A signals get full Kelly; Tier B gets 85%
-        if quality_tier == "B":
-            pct = round(pct * 0.85, 4)
+        # ── Position sizing ───────────────────────────────────────────────────
+        if SCALP_MODE:
+            # Scalp positions use a small fixed risk percentage — Bayesian Kelly
+            # shrinks to zero with sample_size=0 since there's no historical backtest.
+            # Use the user's base risk_pct (1/3/6 % by risk level), capped at 2%.
+            base_risk = RISK_PCT.get(risk_level, 0.03)
+            pct       = round(min(base_risk, 0.02) * vol_factor, 4)
+        else:
+            pct = _kelly_size(
+                sample_size  = sample_size,
+                win_rate     = win_rate,
+                avg_win_pct  = avg_win_pct,
+                avg_loss_pct = avg_loss_pct,
+                risk_level   = risk_level,
+                max_pos_pct  = max_pos_pct,
+                vol_factor   = vol_factor,
+            )
+            # Tier A signals get full Kelly; Tier B gets 85%
+            if quality_tier == "B":
+                pct = round(pct * 0.85, 4)
 
         # Correlation penalty: halve sizing when ≥2 same-direction strategies are
         # already active — correlated longs/shorts move together in a drawdown.
@@ -318,22 +331,36 @@ async def fan_out_to_users(opp: dict, db, redis, regime: dict | None = None) -> 
             continue
 
         # ── Build and save strategy ───────────────────────────────────────────
-        tp_pct       = float(opp.get("expected_return_pct") or 3.0) / 100
-        sl_pct       = float(opp.get("stop_loss_pct") or 0.03)
+        if SCALP_MODE:
+            tp_pct = SCALP_TP
+            sl_pct = SCALP_SL
+        else:
+            tp_pct = float(opp.get("expected_return_pct") or 3.0) / 100
+            sl_pct = float(opp.get("stop_loss_pct") or 0.03)
         rr           = round(tp_pct / sl_pct, 1) if sl_pct > 0 else 0
-        bay_wr       = _bayesian_win_rate(sample_size, win_rate)
         confidence   = int(float(opp.get("model_confidence") or 0) * 100)
-        ev_pct       = avg_win_pct * bay_wr - abs(avg_loss_pct) * (1 - bay_wr)
         sharpe_str   = f"{opp_sharpe:.2f}" if opp_sharpe else "N/A"
-
-        rationale = (
-            f"{opp['summary']} "
-            f"Bayesian win rate: {int(bay_wr*100)}% (n={sample_size}). "
-            f"EV: {ev_pct:+.2f}% | Sharpe: {sharpe_str} | Tier: {quality_tier}. "
-            f"Expected: ~{opp.get('expected_return_pct', 0):.1f}% in {hold_days}d. "
-            f"Position: {int(pct*100)}% | Stop: {int(sl_pct*100)}% | R/R: 1:{rr}. "
-            f"Confidence: {confidence}% | P(ruin): {risk['p_loss_10pct']:.1%}."
-        )
+        if SCALP_MODE:
+            # Use fixed win rate (no backtest) for display; EV = TP*WR - SL*(1-WR)
+            bay_wr = win_rate if win_rate > 0 else 0.55
+            ev_pct = tp_pct * 100 * bay_wr - sl_pct * 100 * (1 - bay_wr)
+            rationale = (
+                f"{opp['summary']} "
+                f"Scalp: TP {tp_pct*100:.2f}% | SL {sl_pct*100:.2f}% | R/R 1:{rr} | "
+                f"Hold ~{SCALP_HOLD_MINUTES} min. "
+                f"EV: {ev_pct:+.3f}% | Confidence: {confidence}% | Size: {pct*100:.1f}%."
+            )
+        else:
+            bay_wr = _bayesian_win_rate(sample_size, win_rate)
+            ev_pct = avg_win_pct * bay_wr - abs(avg_loss_pct) * (1 - bay_wr)
+            rationale = (
+                f"{opp['summary']} "
+                f"Bayesian win rate: {int(bay_wr*100)}% (n={sample_size}). "
+                f"EV: {ev_pct:+.2f}% | Sharpe: {sharpe_str} | Tier: {quality_tier}. "
+                f"Expected: ~{opp.get('expected_return_pct', 0):.1f}% in {hold_days}d. "
+                f"Position: {int(pct*100)}% | Stop: {int(sl_pct*100)}% | R/R: 1:{rr}. "
+                f"Confidence: {confidence}% | P(ruin): {risk['p_loss_10pct']:.1%}."
+            )
 
         saved = await db.fetchrow(
             f"""INSERT INTO strategies
@@ -373,6 +400,11 @@ async def fan_out_to_users(opp: dict, db, redis, regime: dict | None = None) -> 
         await redis.publish(
             f"strategies:{user['id']}",
             json.dumps(publish_payload, default=str),
+        )
+        # Notify the auto_trader service so it can immediately execute the order.
+        await redis.publish(
+            "new_strategy",
+            json.dumps({"strategy_id": str(saved["id"]), "user_id": str(user_id)}, default=str),
         )
         logger.info(
             "Strategy → user=%s ticker=%s tier=%s EV=%+.2f%% Sharpe=%.2f Kelly=%.1f%% Ruin=%.1f%%",
